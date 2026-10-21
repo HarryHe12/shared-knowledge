@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本项目只维护 Skill 与本地知识服务，不做网页端。先读 team-app/README.md 和 team-app/CONTEXT.md。
+本项目维护 Skill、知识服务，以及账号注册登录和管理后台网页；员工日常存取仍通过 Skill。先读 team-app/README.md 和 team-app/CONTEXT.md。
 
 - 唯一 Skill：team-app/skill/SKILL.md，名称 shared-knowledge，同时负责存和取。
 - 客户端：team-app/scripts/knowledge.mjs；后端：team-app/src/；测试：team-app/test/。

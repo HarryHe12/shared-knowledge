@@ -1,18 +1,29 @@
 # 本地知识服务
 
-默认通过 Skill 使用唯一知识库，无网页。后端、存取客户端和 Skill 入口均保存在本项目。需要仓库依赖和 Node >=22.19；SQLite 使用 Node 内置 node:sqlite。
+通过 Skill 使用授权知识范围，网页仅用于账号和管理。后端、存取客户端和 Skill 入口均保存在本项目。需要仓库依赖和 Node >=22.19；SQLite 使用 Node 内置 node:sqlite。
 
 ## 启动与身份
 
-功能验证阶段直接运行 `npm run dev`，无需创建用户、配置个人令牌或手动授权。服务自动使用固定的“本地验证用户”，授予默认库访问权限；重启后沿用同一作者，重试写入仍按幂等键去重。已有用户和记录保留。
+第一版采用自主注册、管理员人工核实身份后审批。网页 `/account` 用于注册登录和设备确认，`/admin` 用于审批、范围授权、成员停用、设备撤销和审计。邮箱暂未自动验证，管理员应通过组织通讯录或线下确认身份后批准；界面不会将填写邮箱视为已验证。
 
-只监听 `127.0.0.1:5181`，`/` 返回 JSON 404。需要恢复个人令牌与成员权限校验时，以 `TEAM_AUTH_REQUIRED=1 npm run dev` 启动，并配置用户：
+首次部署由运维在服务所在机器运行：
 
 ```bash
-TEAM_USER_TOKEN='<至少24字符的个人随机令牌>' node team-app/src/server.mjs create-user '成员名'
+node team-app/src/server.mjs bootstrap-admin
+npm run dev
 ```
 
-令牌只保存哈希；旧用户默认库没有权限时，由管理员执行 `node team-app/src/server.mjs grant '<默认库ID>' '<用户ID>'`。跨库限制、来源检查和输入校验在免令牌模式仍生效。
+初始化交互输入姓名、邮箱和密码（不回显，至少12字符）；已存在管理员时拒绝再次初始化。服务端使用随机盐 scrypt 保存密码，不保存明文。初始管理员仅有管理权，没有业务阅读权，需在后台明确授予范围权限。
+
+正式服务默认强制登录，旧个人令牌不能登录正式 HTTP 服务。仅本机开发可显式 `TEAM_LOCAL_VALIDATION=1 npm run dev`，所有请求共用验证作者，不得用于团队部署。`TEAM_AUTH_REQUIRED` 已由此显式验证开关替代。
+
+员工执行 `node team-app/scripts/knowledge.mjs login --url https://kb.example.test`，打开返回链接，注册/登录后确认设备码。注册状态为 pending，审批后 approved；拒绝为 rejected，停用为 disabled。客户端再次 login 领取会话。设备请求10分钟有效，审批较慢时重新 login 获取新码并登录确认，无需重注册。设备会话空闲30天到期，日常请求自动续期，最长90天重新连接；可主动退出或管理员随时撤销。macOS 凭据写入系统钥匙串，配置文件只保存服务地址与范围，不存密码或令牌。目前 Windows/Linux 自动登录适配尚未实现。
+
+`whoami` 显示身份与授权范围；`use-scope --scope ID` 选择范围；`logout` 撤销当前设备会话。不同范围分别查询，不做隐式跨范围汇总。第一版直接对用户授权；部门是申请信息，不自动授予权限，用户组批量授权尚未实现。
+
+远程部署在受控服务器保存数据库，通过 HTTPS 反向代理访问；设置 `TEAM_PUBLIC_URL=https://kb.example.test`，代理保留原始 Host。需要容器监听时设置 `TEAM_HOST=0.0.0.0`，仅允许代理访问内部端口。服务不自行签发证书。客户端只允许远程 HTTPS 或本机 HTTP，拒绝重定向。注册/登录按来源地址限流；反向代理后也应配置入口限流。生产使用前仍需完成部署、邮件验证及系统凭据适配的验收。
+
+审批与授权相互独立：approved 但没有范围授权仍不可读写。范围 reader 只读；writer 可提交、提取草稿和更改本人记录。管理权限不隐含业务权限。每个范围复用独立 project ID，原默认库保持原ID；后台只显式登记原默认库和新建范围，不自动暴露其他旧项目。新账号没有旧库权限，旧记录作者不自动改写或合并。
 
 空目录的新库固定在 `team-app/.data/team.sqlite`；`.data/` 已有唯一 `.sqlite` 文件时自动沿用，多个文件时要求 `TEAM_DB` 明确选择，不受启动目录影响（旧版根目录 `node` 与 npm workspace 启动可能分别产生两个 `.data` 位置，升级前请检查并用 TEAM_DB 指定已有库，不自动合并）。`TEAM_DB` 可覆盖路径，相对路径按 team-app 目录解析。备份时停止服务再复制数据库。空库自动创建默认库，唯一旧项目自动沿用；有多个旧项目时必须先设置 `TEAM_DEFAULT_PROJECT_ID`。选择会持久化，后续不允许环境变量切换默认库；其他项目数据保留但不通过服务暴露。
 
@@ -20,7 +31,7 @@ TEAM_USER_TOKEN='<至少24字符的个人随机令牌>' node team-app/src/server
 
 入口是 [skill/SKILL.md](skill/SKILL.md)，客户端是 [scripts/knowledge.mjs](scripts/knowledge.mjs)。Skill 的存取实现以仓库脚本为准，不在安装目录另存一份业务逻辑。可在 AI 宿主中加载该入口；若安装宿主入口，保留指向本仓库客户端的路径。
 
-客户端可不带令牌运行；默认令牌文件 `team-app/.data/token` 不存在时直接发送免令牌请求。启用鉴权后，客户端默认读取该文件；也可在自己的终端设置 `TEAM_KB_TOKEN_FILE` 指向权限0600的个人令牌文件；也支持 `TEAM_KB_TOKEN`。可用 `TEAM_KB_URL` 指定另一个本机端口，不允许外部地址或重定向。
+客户端默认使用系统钥匙串会话。旧 `TEAM_KB_TOKEN` / token-file 参数仅供显式开启 legacyTokens 的测试适配器；正式服务不接受旧个人令牌，不要再手工配置令牌。服务地址与范围可通过 login/use-scope 自动记住。
 
 ```bash
 node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次写入唯一标识>'
@@ -32,7 +43,7 @@ node team-app/scripts/knowledge.mjs state
 
 保存原文默认不提取事项。需要时先 `extract --file FILE`，用户确认草稿后，将 changes 数组存为 JSON，再 `save --file FILE --changes-file JSON --idempotency KEY`。相同写入重试复用幂等标识；不自动重试。`snapshot` 的原文和事项是两次读取，不保证并发时原子一致。
 
-接口：`GET /api/default`、`GET/POST /api/records`、`GET /api/items`、`GET /api/timeline?item=ID`、`POST /api/extract`、`POST /api/search`、`POST /api/get-records`、`GET /api/state`。兼容旧 `/api/projects/:默认库ID/*` 路径，`GET /api/projects` 仅返回默认库，禁止 HTTP 新建库或跨库访问。
+接口：`GET /api/default`、`GET/POST /api/records`、`GET /api/items`、`GET /api/timeline?item=ID`、`POST /api/extract`、`POST /api/search`、`POST /api/get-records`、`GET /api/state`。兼容旧 `/api/projects/:默认库ID/*` 路径，`GET /api/projects` 仅返回默认库，普通业务接口禁止新建库，范围由管理员后台建立，跨范围请求必须具备对应授权。
 
 ## 模型与检索
 
@@ -47,7 +58,7 @@ node team-app/scripts/knowledge.mjs state
 
 ## 重要边界
 
-这是可运行的纵向原型，未作为生产多人系统验收。尚无令牌撤销、成员管理界面、审计导出、附件、自动纠错/重建、长期会话指代、跨项目全局汇总。当前事项完整覆盖只指已确认结构化事项；未经提取的原始文字只能通过检索访问。项目内容很多时缺少分层汇总与模型上下文预算，需要限制试用规模。
+这是可运行的纵向原型，未作为生产多人系统验收。已支持会话撤销与成员管理；尚无审计导出、附件、自动纠错/重建、长期会话指代、跨项目全局汇总。当前事项完整覆盖只指已确认结构化事项；未经提取的原始文字只能通过检索访问。项目内容很多时缺少分层汇总与模型上下文预算，需要限制试用规模。
 
 运行 `npm run test:team`。测试覆盖权限、晚到事件、重开、事务/幂等、中文检索、补查证据、向量与重排适配；真实模型及真实向量服务结果以验收清单为准。
 
