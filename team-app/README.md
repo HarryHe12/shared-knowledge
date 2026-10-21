@@ -4,14 +4,15 @@
 
 ## 启动与身份
 
-首次在终端设置至少24字符的个人随机令牌，并创建用户；用户自动获得默认库权限。令牌只保存哈希，不要发进聊天。
+功能验证阶段直接运行 `npm run dev`，无需创建用户、配置个人令牌或手动授权。服务自动使用固定的“本地验证用户”，授予默认库访问权限；重启后沿用同一作者，重试写入仍按幂等键去重。已有用户和记录保留。
+
+只监听 `127.0.0.1:5181`，`/` 返回 JSON 404。需要恢复个人令牌与成员权限校验时，以 `TEAM_AUTH_REQUIRED=1 npm run dev` 启动，并配置用户：
 
 ```bash
-TEAM_USER_TOKEN='<个人随机令牌>' node team-app/src/server.mjs create-user '成员名'
-npm run dev
+TEAM_USER_TOKEN='<至少24字符的个人随机令牌>' node team-app/src/server.mjs create-user '成员名'
 ```
 
-默认启动会读取已有 `team-app/.env.retrieval`（若存在），保留本地 embedding/rerank 配置。只监听 `127.0.0.1:5181`，`/` 返回 JSON 404；所有知识接口都需要个人令牌。旧用户保留已有权限；默认库没有权限时，由管理员执行 `node team-app/src/server.mjs grant '<默认库ID>' '<用户ID>'`。
+令牌只保存哈希；旧用户默认库没有权限时，由管理员执行 `node team-app/src/server.mjs grant '<默认库ID>' '<用户ID>'`。跨库限制、来源检查和输入校验在免令牌模式仍生效。
 
 空目录的新库固定在 `team-app/.data/team.sqlite`；`.data/` 已有唯一 `.sqlite` 文件时自动沿用，多个文件时要求 `TEAM_DB` 明确选择，不受启动目录影响（旧版根目录 `node` 与 npm workspace 启动可能分别产生两个 `.data` 位置，升级前请检查并用 TEAM_DB 指定已有库，不自动合并）。`TEAM_DB` 可覆盖路径，相对路径按 team-app 目录解析。备份时停止服务再复制数据库。空库自动创建默认库，唯一旧项目自动沿用；有多个旧项目时必须先设置 `TEAM_DEFAULT_PROJECT_ID`。选择会持久化，后续不允许环境变量切换默认库；其他项目数据保留但不通过服务暴露。
 
@@ -19,7 +20,7 @@ npm run dev
 
 入口是 [skill/SKILL.md](skill/SKILL.md)，客户端是 [scripts/knowledge.mjs](scripts/knowledge.mjs)。Skill 的存取实现以仓库脚本为准，不在安装目录另存一份业务逻辑。可在 AI 宿主中加载该入口；若安装宿主入口，保留指向本仓库客户端的路径。
 
-客户端默认读取 `team-app/.data/token`；也可在自己的终端设置 `TEAM_KB_TOKEN_FILE` 指向权限0600的个人令牌文件；也支持 `TEAM_KB_TOKEN`。可用 `TEAM_KB_URL` 指定另一个本机端口，不允许外部地址或重定向。
+客户端可不带令牌运行；默认令牌文件 `team-app/.data/token` 不存在时直接发送免令牌请求。启用鉴权后，客户端默认读取该文件；也可在自己的终端设置 `TEAM_KB_TOKEN_FILE` 指向权限0600的个人令牌文件；也支持 `TEAM_KB_TOKEN`。可用 `TEAM_KB_URL` 指定另一个本机端口，不允许外部地址或重定向。
 
 ```bash
 node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次写入唯一标识>'
