@@ -144,6 +144,8 @@ bash install.sh --platform claude --with-optional-adapters
 <details>
 <summary><strong>完整功能列表</strong></summary>
 
+- 新增独立[团队工作台试用版](team-app/README.md)：工作记录、事项状态历史、项目成员权限和带证据问答；向量与 rerank 可选接入。
+
 - **研究方向引导** — `purpose.md` 让 agent 在整理和查询时有明确方向
 - **两步式整理** — 先分析后生成，长内容走两步链式思考，短内容简化处理
 - **ingest 格式验证** — 脚本自动校验分析结果，模型再笨也不会写出残缺数据
