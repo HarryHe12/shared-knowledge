@@ -1,18 +1,28 @@
-import {createServer} from 'node:http';
-import {readFile,mkdir} from 'node:fs/promises';
-import {dirname,resolve} from 'node:path';
+import {mkdir} from 'node:fs/promises';
+import {dirname} from 'node:path';
 import {Store} from './store.mjs';
-import {createModel,extract} from './intelligence.mjs';
-import {ask} from './query-loop.mjs';
-const file=resolve(process.env.TEAM_DB??'team-app/.data/team.sqlite');await mkdir(dirname(file),{recursive:true,mode:0o700});const store=new Store(file);
-if(process.argv[2]==='create-user'){const token=process.env.TEAM_USER_TOKEN;if(!token||token.length<24)throw new Error('TEAM_USER_TOKEN 至少24字符');console.log(JSON.stringify(store.user(process.argv[3]??'管理员',token)));store.close();process.exit(0);}
-if(process.argv[2]==='grant'){const [, , ,project,user]=process.argv;store.grant(project,user);store.close();console.log('已授权');process.exit(0);}
-const model=await createModel();
-const html=await readFile(new URL('../web/index.html',import.meta.url));
-const server=createServer(async(req,res)=>{res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');try{const url=new URL(req.url,'http://localhost');if(req.method==='GET'&&url.pathname==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(html);return;}
-const user=store.authenticate((req.headers.authorization??'').replace(/^Bearer /,''));if(!user){res.writeHead(401);res.end('{"error":"请登录"}');return;}
-if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`)throw Object.assign(new Error('来源不允许'),{status:403});
-let input={};if(req.method==='POST'){let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>100000)throw Object.assign(new Error('请求过大'),{status:413});}try{input=JSON.parse(body||'{}');}catch{throw Object.assign(new Error('JSON无效'),{status:400});}}
-let result;const parts=url.pathname.split('/').filter(Boolean);if(url.pathname==='/api/projects'&&req.method==='GET')result=store.projects(user);else if(url.pathname==='/api/projects'&&req.method==='POST'){if(typeof input.name!=='string'||!input.name.trim()||input.name.length>120)throw Object.assign(new Error('无效项目名'),{status:400});result=store.project(user,input.name.trim());}else if(parts[0]==='api'&&parts[1]==='projects'&&parts[2]){const p=parts[2];store.access(user,p);const action=parts[3];if(req.method==='GET'&&action==='records')result=store.records(user,p);else if(req.method==='GET'&&action==='items')result=store.items(user,p);else if(req.method==='GET'&&action==='timeline')result=store.timeline(user,p,url.searchParams.get('item'));else if(req.method==='POST'&&action==='records')result=store.add(user,p,input);else if(req.method==='POST'&&action==='extract'){if(typeof input.text!=='string'||input.text.length>20000)throw Object.assign(new Error('无效文本'),{status:400});result=await extract(model,input.text,store.items(user,p));}else if(req.method==='POST'&&action==='ask'){result=await ask(store,model,user,p,input);}else throw Object.assign(new Error('未找到接口'),{status:404});}else throw Object.assign(new Error('未找到接口'),{status:404});res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(result));}catch(e){res.writeHead(e.status??500,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:e.status?e.message:'处理失败，请重试；模型配置或返回格式可能无效'}));}});
-server.listen(Number(process.env.TEAM_PORT??5181),'127.0.0.1',()=>console.log('团队应用 http://127.0.0.1:'+(process.env.TEAM_PORT??5181)));
-process.on('SIGTERM',()=>server.close(()=>{store.close();process.exit(0);}));
+import {createModel} from './intelligence.mjs';
+import {createKnowledgeServer} from './http.mjs';
+
+import {databaseFile} from './paths.mjs';
+const file=await databaseFile();
+await mkdir(dirname(file),{recursive:true,mode:0o700});
+const store=new Store(file);
+try {
+ const project=store.defaultProject(process.env.TEAM_DEFAULT_PROJECT_ID);
+ if(process.argv[2]==='create-user'){
+  const token=process.env.TEAM_USER_TOKEN;
+  if(!token||token.length<24)throw new Error('TEAM_USER_TOKEN 至少24字符');
+  const user=store.user(process.argv[3]??'管理员',token);store.grant(project.id,user.id);
+  console.log(JSON.stringify({...user,project}));store.close();
+ }else if(process.argv[2]==='grant'){
+  const [, , ,projectId,userId]=process.argv;
+  if(projectId!==project.id)throw new Error('只能授权默认知识库');
+  store.grant(project.id,userId);store.close();console.log('已授权');
+ }else{
+  const server=createKnowledgeServer(store,await createModel(),project);
+  server.listen(Number(process.env.TEAM_PORT??5181),'127.0.0.1',()=>console.log('知识服务 http://127.0.0.1:'+(process.env.TEAM_PORT??5181)));
+  const shutdown=()=>server.close(()=>{store.close();process.exit(0);});
+  process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+ }
+}catch(error){store.close();throw error;}

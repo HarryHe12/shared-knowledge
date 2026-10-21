@@ -54,3 +54,6 @@ deps/baoyu-url-to-markdown/scripts/bun.lock
 /PLAN.md
 /TODOS.md
 /test-report.md
+
+# 本地知识服务数据与个人令牌
+/team-app/.data/

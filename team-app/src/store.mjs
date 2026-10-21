@@ -10,6 +10,17 @@ export class Store {
  CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,item_id TEXT REFERENCES items(id),record_id TEXT REFERENCES records(id),status TEXT NOT NULL,owner TEXT,deadline TEXT,kind TEXT NOT NULL);
  CREATE VIRTUAL TABLE IF NOT EXISTS record_search USING fts5(id UNINDEXED, terms);
  `);}
+ defaultProject(preferred){
+  this.db.exec('CREATE TABLE IF NOT EXISTS service_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)');
+  const saved=this.db.prepare("SELECT value FROM service_settings WHERE key='default_project'").get()?.value;
+  if(saved&&preferred&&saved!==preferred)throw new Error('默认知识库已固定，不能通过环境变量切换');
+  let project;
+  if(saved||preferred){project=this.db.prepare('SELECT * FROM projects WHERE id=?').get(saved??preferred);if(!project)throw new Error('默认知识库不存在');}
+  else{const projects=this.db.prepare('SELECT * FROM projects').all();if(projects.length>1)throw new Error('存在多个旧项目，请用 TEAM_DEFAULT_PROJECT_ID 明确默认知识库');project=projects[0];if(!project){project={id:randomUUID(),name:'默认知识库'};this.db.prepare('INSERT INTO projects VALUES(?,?)').run(project.id,project.name);}}
+  this.db.prepare("INSERT OR IGNORE INTO service_settings VALUES('default_project',?)").run(project.id);
+  return project;
+ }
+
  user(name,token){const id=randomUUID();this.db.prepare('INSERT INTO users VALUES(?,?,?)').run(id,name,hash(token));return {id,name};}
  authenticate(token){return this.db.prepare('SELECT id,name FROM users WHERE token_hash=?').get(hash(token));}
  project(user,name){const id=randomUUID();this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT INTO projects VALUES(?,?)').run(id,name);this.grant(id,user.id);this.db.exec('COMMIT');return {id,name};}catch(e){this.db.exec('ROLLBACK');throw e;}}

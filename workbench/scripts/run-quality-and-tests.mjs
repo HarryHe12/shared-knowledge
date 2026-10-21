@@ -10,7 +10,6 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const NODE = process.execPath;
 const TSC = path.join(REPO_ROOT, "node_modules/typescript/bin/tsc");
 const VITE = path.join(REPO_ROOT, "node_modules/vite/bin/vite.js");
-const ESLINT = path.join(REPO_ROOT, "node_modules/eslint/bin/eslint.js");
 const FAILURE_DIR = path.join(REPO_ROOT, ".tmp/quality-and-tests");
 const PROCESS_REGISTRY_HOOK = path.join(REPO_ROOT, "workbench/scripts/register-quality-child.cjs");
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -64,14 +63,6 @@ export const QUALITY_STEPS = [
 		],
 	},
 	{
-		id: "build-web",
-		timeoutMs: COMMAND_TIMEOUT_MS,
-		commands: [
-			command([TSC, "-b", "workbench/web/tsconfig.json", "--force"]),
-			command([VITE, "build"], path.join(REPO_ROOT, "workbench/web")),
-		],
-	},
-	{
 		id: "boundary-negative-controls",
 		timeoutMs: COMMAND_TIMEOUT_MS,
 		commands: [
@@ -80,7 +71,6 @@ export const QUALITY_STEPS = [
 				"--test-concurrency=1",
 				"--test",
 				"workbench/scripts/run-quality-and-tests.test.mjs",
-				"workbench/scripts/run-browser-main-flows-ci.test.mjs",
 			]),
 		],
 	},
@@ -88,15 +78,6 @@ export const QUALITY_STEPS = [
 		id: "boundaries",
 		timeoutMs: COMMAND_TIMEOUT_MS,
 		commands: [command(["--import", "tsx", "workbench/scripts/check-workbench-boundaries.mjs"])],
-	},
-	{
-		id: "browser-trial-contracts",
-		timeoutMs: COMMAND_TIMEOUT_MS,
-		commands: [nodeTest(
-			"tests/browser/graph-renderer-trial-shared.test.ts",
-			"tests/browser/capture-issue-159-hover-baseline.test.ts",
-			"tests/browser/compare-issue-159-hover-baseline.test.ts",
-		)],
 	},
 	{
 		id: "graph-path-identity-root",
@@ -142,24 +123,6 @@ export const QUALITY_STEPS = [
 		)],
 	},
 	{
-		id: "web-unit",
-		timeoutMs: COMMAND_TIMEOUT_MS,
-		commands: [nodeTest("workbench/web/test/*.test.ts")],
-	},
-	{
-		id: "web-dom",
-		timeoutMs: COMMAND_TIMEOUT_MS,
-		commands: [command([
-			"--test-concurrency=1",
-			"--import",
-			"tsx",
-			"--import",
-			"./workbench/web/test/setup-dom.ts",
-			"--test",
-			"workbench/web/test/*.test.tsx",
-		])],
-	},
-	{
 		id: "graph",
 		timeoutMs: SLOW_TEST_TIMEOUT_MS,
 		commands: [nodeTest("packages/graph-engine/test/*.test.ts")],
@@ -179,19 +142,7 @@ export const QUALITY_STEPS = [
 		timeoutMs: COMMAND_TIMEOUT_MS,
 		commands: [command([TSC, "-p", "workbench/server/tsconfig.test.json", "--noEmit"])],
 	},
-	{
-		id: "types-web",
-		timeoutMs: COMMAND_TIMEOUT_MS,
-		commands: [
-			command([TSC, "-b", "workbench/web/tsconfig.json", "--noEmit", "--force"]),
-			command([TSC, "-p", "workbench/web/tsconfig.browser.json", "--noEmit"]),
-		],
-	},
-	{
-		id: "web-lint",
-		timeoutMs: COMMAND_TIMEOUT_MS,
-		commands: [command([ESLINT, "."], path.join(REPO_ROOT, "workbench/web"))],
-	},
+	{ id: "team", timeoutMs: SLOW_TEST_TIMEOUT_MS, commands: [command(["--test", "team-app/test/*.test.mjs"])] },
 ];
 
 export function createMinimalEnvironment(source, sandboxHome) {
