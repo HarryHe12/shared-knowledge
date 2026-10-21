@@ -52,7 +52,10 @@ test('headless HTTP and repository client save/read, deny unauthorized and non-d
   const snapshot=await client('snapshot');assert.equal(snapshot.records.length,1);assert.equal(snapshot.records[0].text,text);assert.deepEqual(snapshot.items,[]);
   assert.equal(calls,0);
   assert.equal((await request('/api/projects/'+p.id+'/records')).status,200);
-  const response=await client('ask','--question','总结进展');assert.equal(response.status,'insufficient');assert.ok(calls>0);
+  const response=await client('search','--query','中文原文');assert.equal(response.records[0].id,saved.id);
+  assert.equal((await client('get','--ids',saved.id)).records[0].text,text);
+  assert.deepEqual((await client('state')).items,[]);
+  assert.equal((await request('/api/ask',{question:'总结进展'})).status,410);assert.equal(calls,0);
  }finally{await new Promise(r=>server.close(r));store.close();await rm(dir,{recursive:true,force:true});}
 });
 
