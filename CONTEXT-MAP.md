@@ -21,6 +21,8 @@
 - [Agent Workbench](./workbench/CONTEXT.md) — 本地工作台里用户直接面对的产品语言。
 - [Shared Graph Engine](./packages/graph-engine/CONTEXT.md) — 工作台图谱视图和 Skill 离线 HTML 共用的图谱语言。
 
+- [Team Work App](./team-app/CONTEXT.md) — 独立团队应用的工作记录、事项事件、状态和证据；不改变单人工作台边界。
+
 ## Relationships
 
 - **Skill Package -> Shared Product Language**: Skill 形态维护核心知识库流程，并复用共用词描述用户能看到的概念。
