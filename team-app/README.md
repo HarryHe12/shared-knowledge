@@ -1,27 +1,36 @@
-# 团队工作台（独立应用，试用版）
+# 本地知识服务
 
-在现有单人 Markdown 工作台之外，提供原始工作记录、项目成员权限、事项事件与带证据问答。复用工作台所用的 pi 模型注册和凭证管理，不导入工作台服务或更改现有知识库。
+默认通过 Skill 使用唯一知识库，无网页。后端、存取客户端和 Skill 入口均保存在本项目。需要仓库依赖和 Node >=22.19；SQLite 使用 Node 内置 node:sqlite。
 
-需要仓库依赖与 Node >=22.19。当前开发环境验证使用 Node 24。SQLite 使用 Node 内置 node:sqlite（部分 Node 版本可能显示实验性提示）。
+## 启动与身份
 
-## 启动
-
-从仓库根执行，先通过环境变量设置一个至少24字符的随机个人令牌，再创建用户（令牌只保存哈希）：
+首次在终端设置至少24字符的个人随机令牌，并创建用户；用户自动获得默认库权限。令牌只保存哈希，不要发进聊天。
 
 ```bash
 TEAM_USER_TOKEN='<个人随机令牌>' node team-app/src/server.mjs create-user '成员名'
-npm run dev:team
+npm run dev
 ```
 
-打开 http://127.0.0.1:5181，输入个人令牌，创建项目。令牌仅保存在当前页面内存，刷新后重新输入。默认仅绑定 loopback，供本地试用；尚未提供远程部署、TLS或企业 SSO。
+默认启动会读取已有 `team-app/.env.retrieval`（若存在），保留本地 embedding/rerank 配置。只监听 `127.0.0.1:5181`，`/` 返回 JSON 404；所有知识接口都需要个人令牌。旧用户保留已有权限；默认库没有权限时，由管理员执行 `node team-app/src/server.mjs grant '<默认库ID>' '<用户ID>'`。
 
-管理员可用同一命令创建其他用户，然后授权项目；用户与项目 ID 来自命令输出及项目接口：
+空目录的新库固定在 `team-app/.data/team.sqlite`；`.data/` 已有唯一 `.sqlite` 文件时自动沿用，多个文件时要求 `TEAM_DB` 明确选择，不受启动目录影响（旧版根目录 `node` 与 npm workspace 启动可能分别产生两个 `.data` 位置，升级前请检查并用 TEAM_DB 指定已有库，不自动合并）。`TEAM_DB` 可覆盖路径，相对路径按 team-app 目录解析。备份时停止服务再复制数据库。空库自动创建默认库，唯一旧项目自动沿用；有多个旧项目时必须先设置 `TEAM_DEFAULT_PROJECT_ID`。选择会持久化，后续不允许环境变量切换默认库；其他项目数据保留但不通过服务暴露。
+
+## Skill 与客户端
+
+入口是 [skill/SKILL.md](skill/SKILL.md)，客户端是 [scripts/knowledge.mjs](scripts/knowledge.mjs)。Skill 的存取实现以仓库脚本为准，不在安装目录另存一份业务逻辑。可在 AI 宿主中加载该入口；若安装宿主入口，保留指向本仓库客户端的路径。
+
+客户端默认读取 `team-app/.data/token`；也可在自己的终端设置 `TEAM_KB_TOKEN_FILE` 指向权限0600的个人令牌文件；也支持 `TEAM_KB_TOKEN`。可用 `TEAM_KB_URL` 指定另一个本机端口，不允许外部地址或重定向。
 
 ```bash
-node team-app/src/server.mjs grant '<项目ID>' '<用户ID>'
+node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次写入唯一标识>'
+node team-app/scripts/knowledge.mjs snapshot
+node team-app/scripts/knowledge.mjs ask --question '目前的进展和阻塞是什么？'
+node team-app/scripts/knowledge.mjs reply --clarification-id '<ID>' --reply '我的判断标准'
 ```
 
-授权目前是本机管理员 CLI，成员不可通过 HTTP 自行授权。记录在 `team-app/.data/team.sqlite`，可通过 `TEAM_DB` 指定独立路径。备份时停止服务后复制数据库；在线备份尚未实现。
+保存原文默认不提取事项。需要时先 `extract --file FILE`，用户确认草稿后，将 changes 数组存为 JSON，再 `save --file FILE --changes-file JSON --idempotency KEY`。相同写入重试复用幂等标识；不自动重试。`snapshot` 的原文和事项是两次读取，不保证并发时原子一致。
+
+接口：`GET /api/default`、`GET/POST /api/records`、`GET /api/items`、`GET /api/timeline?item=ID`、`POST /api/extract`、`POST /api/ask`。兼容旧 `/api/projects/:默认库ID/*` 路径，`GET /api/projects` 仅返回默认库，禁止 HTTP 新建库或跨库访问。
 
 ## 模型与检索
 
@@ -50,9 +59,9 @@ node team-app/src/server.mjs grant '<项目ID>' '<用户ID>'
 
 `ask` 接口现在返回 `answered`、`insufficient` 或 `needs_clarification`。模型在每轮选择补查、澄清或回答，最多三次调用；补查同样走已配置的混合召回与rerank。返回候选答案前检查格式、引用ID及证据要求；不合法的输出在剩余预算内自行修正。
 
-需要用户才能确定的对象/时间/评价标准，返回一个具体问题、最多三个选项，界面支持选项或自由输入。用户回复通过 `clarification_id` 与 `reply` 提交，服务端保留原问题和已澄清条件，重新检索后续答。不会把空检索、服务错误都解释成用户表达不清。
+需要用户才能确定的对象/时间/评价标准，返回一个具体问题、最多三个选项，Skill 呈现选项并接收自由输入。用户回复通过 `clarification_id` 与 `reply` 提交，服务端保留原问题和已澄清条件，重新检索后续答。不会把空检索、服务错误都解释成用户表达不清。
 
-澄清状态存在独立数据库表，绑定用户和项目；30分钟有效，成功使用后不可重复提交，最多两次澄清（最多三段查询、九次模型调用）。服务失败允许重试。当前页面刷新后不自动恢复澄清面板，需要重新提问；过期待澄清数据尚未自动清理。语义充分性与何时澄清主要由模型判断，程序只做结构和引用检查，尚无独立事实验证器。
+澄清状态存在独立数据库表，绑定用户和项目；30分钟有效，成功使用后不可重复提交，最多两次澄清（最多三段查询、九次模型调用）。服务失败允许重试。Skill 应保留并传回 clarification_id；过期待澄清数据尚未自动清理。语义充分性与何时澄清主要由模型判断，程序只做结构和引用检查，尚无独立事实验证器。
 
 工作场景循环测试、固定输入和已知失败见 [扩展验收报告](eval/loop-scenarios/REPORT-20261021.md)。
 

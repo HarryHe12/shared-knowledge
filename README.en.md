@@ -1,3 +1,5 @@
+> As of 2026-10-21, both web UIs have been removed. `npm run dev` starts only the local knowledge API on port 5181. Use the repository client and minimal Skill in [team-app](team-app/README.md). The legacy Markdown backend is available explicitly through `npm run dev:legacy`. Workbench UI descriptions below are historical.
+
 English | [中文](README.md)
 
 <div align="center">

@@ -1,5 +1,7 @@
 # Context Map
 
+当前产品入口为 `team-app/skill/SKILL.md` 与本地后端。两套网页已删除；下文 Agent Workbench 词汇与 ADR 作为旧后端及历史设计参考。
+
 本仓库使用多份领域词表。先读这张图，再按你要改的区域进入对应 `CONTEXT.md`；只有当某个区域长出一批独有概念时，才新增局部词表。
 
 ## How To Read This Map

@@ -2,64 +2,28 @@
 
 ## 🧭 仓库导航（任何人 / AI 进来先读这里）
 
-本仓库是 **llm-wiki monorepo**，含三个区：
+本仓库当前以 **Skill + 本地后端** 为产品入口，5180 / 5181 两套网页已删除。
 
 | 区 | 位置 | 状态 |
 |---|---|---|
-| **agent 工作台**（开发主线） | `workbench/`（server + web） | 🚧 活跃开发 |
-| **共享图谱引擎** | `packages/graph-engine/` | 🚧 随 agent 演进 |
-| **Skill 形态** | 根目录 `SKILL.md` / `scripts/` / `templates/` / `platforms/` | ❄️ 成熟·维护冻结 |
+| 默认知识服务、存取客户端、最小 Skill | `team-app/` | 活跃开发 |
+| 旧 Markdown 工作台后端 | `workbench/server/` | 兼容保留，不默认启动 |
+| 离线图谱引擎 | `packages/graph-engine/` | 继续供 Skill HTML 使用 |
+| Markdown Skill | 根 `SKILL.md` / `scripts/` / `templates/` / `platforms/` | 成熟维护 |
 
-➡️ **开发 agent 工作台（日常主线）**：先读 [workbench/AGENTS.md](workbench/AGENTS.md) 的冷启动表，再按任务打开 [workbench/PRODUCT.md](workbench/PRODUCT.md) 对应章节；不要默认读历史归档。
+先读 `team-app/README.md` 和 `team-app/CONTEXT.md`；旧后端改动再读 `workbench/AGENTS.md` 与 `workbench/PRODUCT.md`。统一术语和历史 ADR 见 `CONTEXT-MAP.md`。
 
-➡️ **统一术语、产品边界或 ADR**：先读 [CONTEXT-MAP.md](CONTEXT-MAP.md)，再进入对应 `CONTEXT.md` 和 [docs/adr/](docs/adr/)。
+## 开发命令与数据边界
 
-➡️ **下方架构、命令、分支和推送规则是全仓通用规则**。Skill 维护细节只在维护 Skill 时阅读。
-
----
-
-## 🏗️ monorepo 怎么连
-
-```
-workbench/web (React 19, SSE) ──HTTP POST + SSE──▶ workbench/server (Hono + @earendil-works/pi-coding-agent)
-                                                          │
-                                                          ├─ spawn 根目录 scripts/（Skill 已有能力，ADR-16 能力归属）
-                                                          └─ 依赖 @llm-wiki/graph-engine
-packages/graph-engine ──ESM + IIFE 双产物──▶ workbench/web 图谱视图 + Skill 离线 HTML（一个引擎、两个宿主，ADR-21）
-```
-
-- 权威架构图、技术栈见 [workbench/PRODUCT.md §3](workbench/PRODUCT.md)；ADR 正文见 [docs/adr/](docs/adr/)；当前阶段与协作铁律见 [workbench/AGENTS.md](workbench/AGENTS.md)。
-- **三类数据彻底分离**（别写错位置）：知识库 `~/llm-wiki/<name>/`、应用数据 `~/.llm-wiki-agent/`、模型凭证 `~/.pi/agent/auth.json`（pi-agent 管，权限 0600）。应用自己的 `config.json` **绝不存** API key。
-
-## ⚙️ 开发命令速查
-
-npm workspaces，三个包（根 `package.json` 不设 `"type": "module"`——Skill 的 CommonJS 测试要兼容，ESM 声明在各子包；ADR-20）：
-
-| 包 | 路径 | npm 名 |
-|---|---|---|
-| 前端 | `workbench/web` | `@llm-wiki-agent/web` |
-| 后端 | `workbench/server` | `@llm-wiki-agent/server` |
-| 图谱引擎 | `packages/graph-engine` | `@llm-wiki/graph-engine` |
-
-| 操作 | 命令（从仓库根） |
-|---|---|
-| 一行启动（后端 `8787` + 前端 `5180`，strictPort） | `npm run dev` |
-| 本机与 GitHub 共用的完整质量检查 | `npm run quality-and-tests` |
-| 工作台契约边界检查 | `npm run check:boundaries` |
-| 全仓类型检查 | `npm run typecheck` |
-| 前端 lint | `npm run lint -w @llm-wiki-agent/web` |
-| 前端单测（unit + dom） | `npm run test -w @llm-wiki-agent/web` |
-| 前端 Paper 视觉回归（playwright） | `npm run visual:paper -w @llm-wiki-agent/web` |
-| 引擎单测 | `npm run test -w @llm-wiki/graph-engine` |
-| 后端单测（server 无聚合 test 脚本，用 node:test） | `node --import tsx --test "workbench/server/src/**/*.test.ts"` |
-
-要点：
-
-- 测试统一用 Node 内置 `node --test`（不是 jest/vitest）。前端 DOM 测试走 jsdom + @testing-library/react，视觉回归用 playwright（仅 dev 依赖，不进运行时）。
-- `web` / `server` 的 `build` 与 `typecheck` 带 `prebuild` / `pretypecheck` 钩子，会**自动先 build `@llm-wiki/graph-engine`**。改了引擎代码后，跑前端/后端的 typecheck 或 build 会自动带上最新引擎产物；单跑引擎自己的 `tsc --noEmit` 不会刷新 `dist/`。
-- Node `>=22.19.0`（pi-coding-agent 硬要求，`.mise.toml` / `.nvmrc` 锁定）。
-
----
+- Node >=22.19，npm workspaces，根包保持 CommonJS 兼容。
+- `npm run dev`：仅启动 5181 本地知识服务。
+- `npm run dev:legacy`：显式启动 8787 旧后端。
+- `npm run test:team`：知识服务与存取测试。
+- `npm run quality-and-tests`：全仓后端、契约、引擎质量检查。
+- `npm run typecheck` / `npm run check:boundaries`：类型与契约检查。
+- 默认知识库数据库位于 `team-app/.data/team.sqlite`，客户端位于 `team-app/scripts/knowledge.mjs`，最小入口位于 `team-app/skill/SKILL.md`。
+- 旧 Markdown 库 `~/llm-wiki/`、应用数据 `~/.llm-wiki-agent/`、pi 凭证 `~/.pi/agent/auth.json` 保留且分离。不在应用配置保存模型密钥。
+- 测试使用 Node 内置 node:test；引擎更新后需 build 再验证旧后端类型。
 
 ## Skill 形态：安装与维护
 
