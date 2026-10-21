@@ -1,8 +1,9 @@
 import {createServer} from 'node:http';
 import {extract} from './intelligence.mjs';
 import {ask} from './query-loop.mjs';
+import {searchRecords,getRecords,getState} from './evidence.mjs';
 
-export function createKnowledgeServer(store, model, project, {authRequired = true} = {}) {
+export function createKnowledgeServer(store, model, project, {authRequired = true, legacyAsk = false} = {}) {
  const localUser = authRequired ? null : store.localValidationUser(project.id);
  return createServer(async(req,res)=>{
   const send=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
@@ -38,7 +39,13 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
    else if(req.method==='POST'&&action==='extract'){
     if(typeof input.text!=='string'||!input.text.trim()||input.text.length>20000)throw Object.assign(new Error('无效文本'),{status:400});
     result=await extract(model,input.text,store.items(user,project.id));
-   }else if(req.method==='POST'&&action==='ask')result=await ask(store,model,user,project.id,input);
+   }else if(req.method==='POST'&&action==='search')result=await searchRecords(store,user,project.id,input);
+   else if(req.method==='POST'&&action==='get-records')result=getRecords(store,user,project.id,input.ids);
+   else if(req.method==='GET'&&action==='state')result=getState(store,user,project.id);
+   else if(req.method==='POST'&&action==='ask'){
+    if(!legacyAsk)return send(410,{error:'服务端问答已停用；请使用 search、get-records、state，由调用方 Agent 组织回答'});
+    result=await ask(store,model,user,project.id,input);
+   }
    else return send(404,{error:'未找到接口'});
    send(200,result);
   }catch(error){send(error.status??500,{error:error.status?error.message:'处理失败，请检查模型或服务配置'});}
