@@ -21,23 +21,18 @@ const REQUIRED_STEPS = [
 	"build-contracts",
 	"build-graph",
 	"build-server",
-	"build-web",
 	"boundary-negative-controls",
 	"boundaries",
-	"browser-trial-contracts",
 	"graph-path-identity-root",
 	"contracts",
 	"startup-isolation",
 	"route-registry-negative-controls",
 	"server",
-	"web-unit",
-	"web-dom",
 	"graph",
 	"types-contracts",
 	"types-graph",
 	"types-server",
-	"types-web",
-	"web-lint",
+	"team",
 ];
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -53,10 +48,6 @@ test("quality entrypoint covers every required check in a stable sequence", () =
 	assert.ok(QUALITY_STEPS.flatMap((step) => step.commands).every((item) =>
 		item.command !== "npm" && item.command !== "npm.cmd"
 	));
-	for (const stepId of ["build-web", "types-web"]) {
-		const step = QUALITY_STEPS.find((candidate) => candidate.id === stepId);
-		assert.ok(step.commands.some((item) => item.args.includes("--force")));
-	}
 	const startup = QUALITY_STEPS.find((step) => step.id === "startup-isolation");
 	assert.ok(startup.commands[0].args.includes("workbench/server/test/startup-isolation.test.ts"));
 	assert.ok(startup.commands[0].args.includes("workbench/server/test/linux-child-isolation.test.mjs"));
@@ -66,13 +57,7 @@ test("quality entrypoint covers every required check in a stable sequence", () =
 	assert.ok(privacyArgs.includes("workbench/scripts/check-repository-privacy.mjs"));
 	const negativeControls = QUALITY_STEPS.find((step) => step.id === "boundary-negative-controls");
 	const negativeControlArgs = negativeControls.commands.flatMap((item) => item.args);
-	assert.ok(negativeControlArgs.includes("workbench/scripts/run-browser-main-flows-ci.test.mjs"));
 	assert.ok(negativeControlArgs.includes("--test-concurrency=1"));
-	const browserTrialContracts = QUALITY_STEPS.find((step) => step.id === "browser-trial-contracts");
-	const browserTrialArgs = browserTrialContracts.commands.flatMap((item) => item.args);
-	assert.ok(browserTrialArgs.includes("tests/browser/graph-renderer-trial-shared.test.ts"));
-	assert.ok(browserTrialArgs.includes("tests/browser/capture-issue-159-hover-baseline.test.ts"));
-	assert.ok(browserTrialArgs.includes("tests/browser/compare-issue-159-hover-baseline.test.ts"));
 	const graphPathIdentity = QUALITY_STEPS.find((step) => step.id === "graph-path-identity-root");
 	assert.deepEqual(graphPathIdentity.commands.flatMap((item) => item.args).filter((arg) => (
 		arg.startsWith("tests/js/") || arg.startsWith("tests/graph-")

@@ -9,7 +9,6 @@ import * as graphEngine from "../src";
 
 interface SupportedExportsBaseline {
   workbenchServer: string[];
-  workbenchWeb: string[];
   offlineHost: string[];
   supportedPublicCompatibility: string[];
 }
@@ -48,11 +47,10 @@ const RETIRED_PUBLIC_EXPORTS = [
 ] as const;
 
 describe("issue #159 supported graph-engine exports", () => {
-  it("records the exact exports imported by both workbench packages", async () => {
+  it("records the exact exports imported by the legacy backend", async () => {
     const baseline = await readBaseline();
 
     assert.deepEqual(await packageImports(path.join(REPO_ROOT, "workbench/server/src")), baseline.workbenchServer);
-    assert.deepEqual(await packageImports(path.join(REPO_ROOT, "workbench/web/src")), baseline.workbenchWeb);
   });
 
   it("records the exact graph-engine globals used by the offline host", async () => {

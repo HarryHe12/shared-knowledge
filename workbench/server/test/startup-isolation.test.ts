@@ -19,8 +19,6 @@ import test from "node:test";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const SERVER_ENTRY = join(REPO_ROOT, "workbench/server/dist/index.js");
-const WEB_ROOT = join(REPO_ROOT, "workbench/web");
-const VITE_ENTRY = join(REPO_ROOT, "node_modules/vite/bin/vite.js");
 const TRUSTED_ORIGIN = "http://127.0.0.1:5180";
 const TOKEN_HEADER = "X-LLM-Wiki-Workbench-Token";
 const START_TIMEOUT_MS = 20_000;
@@ -83,7 +81,6 @@ test(
 		assert.equal(externalProbeConnections, 1);
 		const port = await availablePort();
 		let running: RunningServer | undefined;
-		let vite: SpawnedServer | undefined;
 
 		await mkdir(join(kbPath, "wiki", "entities"), { recursive: true });
 		await mkdir(appDir, { recursive: true });
@@ -122,7 +119,6 @@ sleep 30
 		await writeFile(outsideMarker, "must-not-change\n");
 
 		t.after(async () => {
-			if (vite) await stopSpawnedProcess(vite).catch(() => undefined);
 			if (running) await running.stop().catch(() => undefined);
 			for (const socket of externalProbeSockets) socket.destroy();
 			await closeServer(externalProbeServer).catch(() => undefined);
@@ -212,8 +208,6 @@ sleep 30
 		assert.notEqual(competingStart.code, 0);
 		assert.equal(competingStart.signal, null);
 		assert.match(competingStart.output, /EADDRINUSE/);
-		vite = await startVite(home, port);
-		assert.equal((await frontendApiRequest()).status, 200);
 		const tokenAfterCompetingStart = await readFile(tokenFile, "utf8");
 		assert.equal(tokenAfterCompetingStart, secondToken);
 		assert.equal(
@@ -380,44 +374,6 @@ function spawnServer(environment: NodeJS.ProcessEnv): SpawnedServer {
 	};
 }
 
-async function startVite(home: string, apiPort: number): Promise<SpawnedServer> {
-	const child = spawn(process.execPath, [VITE_ENTRY, "--host", "127.0.0.1", "--port", "5180", "--strictPort"], {
-		cwd: WEB_ROOT,
-		detached: process.platform !== "win32",
-		env: {
-			HOME: home,
-			LANG: "C.UTF-8",
-			LLM_WIKI_AGENT_API_ORIGIN: `http://127.0.0.1:${apiPort}`,
-			LLM_WIKI_AGENT_DISABLE_HMR: "1",
-			PATH: process.env.PATH ?? "/usr/bin:/bin",
-		},
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	let captured = "";
-	child.stdout?.setEncoding("utf8");
-	child.stderr?.setEncoding("utf8");
-	child.stdout?.on("data", (chunk: string) => {
-		captured += chunk;
-	});
-	child.stderr?.on("data", (chunk: string) => {
-		captured += chunk;
-	});
-	const spawned = { child, output: () => captured };
-	await waitUntil(
-		() => captured.includes("Local:"),
-		START_TIMEOUT_MS,
-		() => `Vite did not start\n${captured}`,
-		child,
-	);
-	return spawned;
-}
-
-async function stopSpawnedProcess(spawned: SpawnedServer): Promise<void> {
-	const exit = waitForExit(spawned.child, STOP_TIMEOUT_MS, spawned.output);
-	signalProcessTree(spawned.child, "SIGTERM");
-	await exit;
-}
-
 async function expectFailedStart(
 	environment: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }> {
@@ -453,15 +409,7 @@ async function eventStreamRequest(
 	});
 }
 
-async function frontendApiRequest(): Promise<Response> {
-	return fetch("http://127.0.0.1:5180/api/knowledge-base", {
-		headers: {
-			origin: TRUSTED_ORIGIN,
-			"sec-fetch-site": "same-origin",
-		},
-		signal: AbortSignal.timeout(OPERATION_TIMEOUT_MS),
-	});
-}
+
 
 async function graphRebuildRequest(port: number, token: string, kbPath: string): Promise<Response> {
 	return fetch(`http://127.0.0.1:${port}/api/graph/rebuild?kb=${encodeURIComponent(kbPath)}`, {
