@@ -10,7 +10,8 @@
   "workspaces": [
     "workbench/server",
     "workbench/web",
-    "packages/*"
+    "packages/*",
+    "team-app"
   ],
   "scripts": {
     "check:boundaries": "node --import tsx workbench/scripts/check-workbench-boundaries.mjs",
@@ -21,7 +22,9 @@
     "dev:web": "npm run dev --workspace=@llm-wiki-agent/web",
     "quality-and-tests": "node workbench/scripts/run-quality-and-tests.mjs",
     "test:boundaries": "node --import tsx --test workbench/scripts/check-workbench-boundaries.test.mjs",
-    "typecheck": "npm run check:boundaries && npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run check:boundaries && npm run typecheck --workspaces --if-present",
+    "dev:team": "npm run start -w @llm-wiki/team-app",
+    "test:team": "npm run test -w @llm-wiki/team-app"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
