@@ -1,0 +1,114 @@
+[
+  {
+    "id": 1,
+    "question": "预算是多少",
+    "expected": "37万元",
+    "source": "01-立项.md",
+    "status": "未执行"
+  },
+  {
+    "id": 2,
+    "question": "负责人是谁",
+    "expected": "林岚",
+    "source": "01-立项.md",
+    "status": "未执行"
+  },
+  {
+    "id": 3,
+    "question": "最新首发日期",
+    "expected": "2026-12-02",
+    "source": "03-更新.md",
+    "status": "未执行"
+  },
+  {
+    "id": 4,
+    "question": "最初首发日期",
+    "expected": "2026-11-18",
+    "source": "01-立项.md",
+    "status": "未执行"
+  },
+  {
+    "id": 5,
+    "question": "项目代号",
+    "expected": "SG-741",
+    "source": "01-立项.md",
+    "status": "未执行"
+  },
+  {
+    "id": 6,
+    "question": "接口审查负责人",
+    "expected": "周远",
+    "source": "02-依赖.md",
+    "status": "未执行"
+  },
+  {
+    "id": 7,
+    "question": "接口审查完成日期",
+    "expected": "2026-11-05",
+    "source": "02-依赖.md",
+    "status": "未执行"
+  },
+  {
+    "id": 8,
+    "question": "首发前置条件",
+    "expected": "接口审查、数据迁移",
+    "source": "02-依赖.md",
+    "status": "未执行"
+  },
+  {
+    "id": 9,
+    "question": "英文别名",
+    "expected": "Seagull",
+    "source": "05-English.md",
+    "status": "未执行"
+  },
+  {
+    "id": 10,
+    "question": "试点人数",
+    "expected": "23",
+    "source": "05-English.md",
+    "status": "未执行"
+  },
+  {
+    "id": 11,
+    "question": "测试设备数量",
+    "expected": "7",
+    "source": "06-表格.md",
+    "status": "未执行"
+  },
+  {
+    "id": 12,
+    "question": "备用设备数量",
+    "expected": "2",
+    "source": "06-表格.md",
+    "status": "未执行"
+  },
+  {
+    "id": 13,
+    "question": "42万元是否已批准",
+    "expected": "未批准",
+    "source": "04-冲突.md",
+    "status": "未执行"
+  },
+  {
+    "id": 14,
+    "question": "最终利润",
+    "expected": "材料未提供",
+    "source": "",
+    "status": "未执行"
+  },
+  {
+    "id": 15,
+    "question": "客户电话号码",
+    "expected": "材料未提供",
+    "source": "",
+    "status": "未执行"
+  },
+  {
+    "id": 16,
+    "question": "准备花多少钱",
+    "expected": "37万元",
+    "source": "01-立项.md",
+    "status": "未执行"
+  }
+]
