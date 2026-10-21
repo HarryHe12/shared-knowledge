@@ -52,6 +52,8 @@ export function fuse(lists) {
 export async function retrieve(store, user, project, query, options = {}) {
   // Check permissions before consulting caches or making any external request.
   store.access(user, project);
+  const epoch=store.db.prepare('SELECT value FROM record_epoch').get().value;
+  const unchanged=()=>{if(store.db.prepare('SELECT value FROM record_epoch').get().value!==epoch)throw Object.assign(new Error('记录已变化，请重新检索'),{status:409});};
   const config = retrievalConfig(options);
   const lexical = config.mode === 'vector' ? [] : store.search(user, project, query);
   const notes = config.mode === 'vector' ? [] : ['中文全文 BM25'];
@@ -67,6 +69,7 @@ export async function retrieve(store, user, project, query, options = {}) {
       });
       const vector = result.data?.[0]?.embedding;
       cosine(vector, vector);
+      unchanged();
       store.db.prepare('INSERT OR REPLACE INTO embeddings VALUES(?,?)').run(key, JSON.stringify(vector));
       return vector;
     };
@@ -92,5 +95,6 @@ export async function retrieve(store, user, project, query, options = {}) {
     hits = [...new Set([...result.results].sort((a,b) => b.relevance_score - a.relevance_score).map(r => r.index))].map(i => candidates[i]);
     notes.push('rerank');
   }
+  unchanged();
   return { hits: hits.slice(0, config.topK), description: notes.join(' + '), mode: config.mode };
 }

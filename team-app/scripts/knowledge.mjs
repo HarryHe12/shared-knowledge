@@ -5,11 +5,11 @@ import {parseArgs} from 'node:util';
 
 export async function run(args=process.argv.slice(2),env=process.env){
  const {values,positionals}=parseArgs({args,allowPositionals:true,options:{
-  query:{type:'string'},ids:{type:'string'},limit:{type:'string'},depth:{type:'string'},strategy:{type:'string'},url:{type:'string'},'token-file':{type:'string'},file:{type:'string'},question:{type:'string'},reply:{type:'string'},
+  id:{type:'string'},version:{type:'string'},query:{type:'string'},ids:{type:'string'},limit:{type:'string'},depth:{type:'string'},strategy:{type:'string'},url:{type:'string'},'token-file':{type:'string'},file:{type:'string'},question:{type:'string'},reply:{type:'string'},
   'clarification-id':{type:'string'},item:{type:'string'},'changes-file':{type:'string'},'occurred-at':{type:'string'},idempotency:{type:'string'},
  }});
  const [command]=positionals;
- if(!command||command==='help'){console.log('knowledge.mjs records|items|snapshot|timeline --item ID|save --file FILE [--changes-file FILE] [--idempotency KEY]|extract --file FILE|search --query TEXT [--strategy hybrid|exact] [--limit 15] [--depth 1]|get --ids ID,ID|state');return;}
+ if(!command||command==='help'){console.log('knowledge.mjs records|items|snapshot|timeline --item ID|save --file FILE [--changes-file FILE] [--idempotency KEY]|extract --file FILE|search --query TEXT [--strategy hybrid|exact] [--limit 15] [--depth 1]|get --ids ID,ID|state|history --id ID|correct --id ID --version N --file FILE [--changes-file FILE]|withdraw|restore|purge --id ID --version N');return;}
  const url=new URL(values.url??env.TEAM_KB_URL??'http://127.0.0.1:5181');
  if(url.username||url.password)throw new Error('服务地址不可包含凭证');
  if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname))throw new Error('仅连接本地 HTTP 知识服务');
@@ -24,6 +24,12 @@ export async function run(args=process.argv.slice(2),env=process.env){
  if(command==='snapshot')result={records:await request('records'),items:await request('items')};
  else if(command==='search')result=await request('search',{query:required('query'),...(values.limit?{limit:Number(values.limit)}:{}),...(values.depth?{depth:Number(values.depth)}:{}),...(values.strategy?{strategy:values.strategy}:{})});
  else if(command==='get')result=await request('get-records',{ids:required('ids').split(',')});
+ else if(command==='history')result=await request('record-history?id='+encodeURIComponent(required('id')));
+ else if(['correct','withdraw','restore','purge'].includes(command)){
+  const body={id:required('id'),version:Number(required('version'))};
+  if(command==='correct'){body.text=await readFile(required('file'),'utf8');if(values['changes-file'])body.changes=JSON.parse(await readFile(values['changes-file'],'utf8'));if(values['occurred-at'])body.occurred_at=values['occurred-at'];}
+  result=await request(command,body);
+ }
  else if(command==='state')result=await request('state');
  else if(['records','items'].includes(command))result=await request(command);
  else if(command==='timeline')result=await request('timeline?item='+encodeURIComponent(required('item')));

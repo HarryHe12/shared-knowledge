@@ -35,6 +35,8 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
    if(req.method==='GET'&&action==='records')result=store.records(user,project.id);
    else if(req.method==='GET'&&action==='items')result=store.items(user,project.id);
    else if(req.method==='GET'&&action==='timeline')result=store.timeline(user,project.id,url.searchParams.get('item'));
+   else if(req.method==='GET'&&action==='record-history')result=store.history(user,project.id,url.searchParams.get('id'));
+   else if(req.method==='POST'&&['correct','withdraw','restore','purge'].includes(action))result=store[action](user,project.id,input);
    else if(req.method==='POST'&&action==='records')result=store.add(user,project.id,input);
    else if(req.method==='POST'&&action==='extract'){
     if(typeof input.text!=='string'||!input.text.trim()||input.text.length>20000)throw Object.assign(new Error('无效文本'),{status:400});

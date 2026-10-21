@@ -15,8 +15,9 @@ export async function searchRecords(store,user,project,input,options={}){
  if(!Number.isInteger(depth)||depth<0||depth>2)throw invalid('depth 须为0—2');
  const strategy=input.strategy??'hybrid';
  if(!['hybrid','exact'].includes(strategy))throw invalid('strategy 须为 hybrid 或 exact');
- const all=store.records(user,project),byId=new Map(all.map(r=>[r.id,r]));
+
  const result=strategy==='exact'?{hits:[],mode:'exact',description:'精确实体与引用'}:await retrieve(store,user,project,input.query,{...options,topK:limit});
+ const all=store.records(user,project),byId=new Map(all.map(r=>[r.id,r]));
  const anchored=anchoredLookup(store,user,project,input.query,{depth,limit:12});
  const hits=[...new Set([...result.hits,...anchored.hits].map(r=>r.id))];
  return {query:input.query,scope:{project_id:project},records:hits.slice(0,limit).map(id=>byId.get(id)),
