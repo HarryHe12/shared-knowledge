@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "start:retrieval": "node --env-file=.env.retrieval src/server.mjs",
+    "eval:retrieval": "node --env-file=.env.retrieval scripts/evaluate-retrieval.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.4",
