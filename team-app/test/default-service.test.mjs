@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -43,7 +44,7 @@ test('headless HTTP and repository client save/read, deny unauthorized and non-d
   assert.equal((await request('/api/records',[])).status,400);
   const text='中文原文，待用户确认事项。';const file=join(dir,'record.txt');await writeFile(file,text);
   const client=(...args)=>new Promise((resolve,reject)=>{
-   const child=spawn(process.execPath,['team-app/scripts/knowledge.mjs',...args],{env:{...process.env,TEAM_KB_TOKEN:token,TEAM_KB_URL:url},stdio:['ignore','pipe','pipe']});
+   const child=spawn(process.execPath,[fileURLToPath(new URL('../scripts/knowledge.mjs', import.meta.url)),...args],{env:{...process.env,TEAM_KB_TOKEN:token,TEAM_KB_URL:url},stdio:['ignore','pipe','pipe']});
    let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);child.on('error',reject);child.on('exit',code=>code===0?resolve(JSON.parse(out)):reject(new Error(err)));
   });
   const saved=await client('save','--file',file,'--idempotency','same-save');
@@ -81,7 +82,7 @@ test('local validation accepts tokenless writes and keeps one author across serv
     assert.equal(response.status,200);const record=await response.json();
     if(saved)assert.equal(record.id,saved.id);saved=record;
     const snapshot=await new Promise((resolve,reject)=>{
-     const child=spawn(process.execPath,['team-app/scripts/knowledge.mjs','snapshot'],{env:{...process.env,TEAM_KB_TOKEN:'',TEAM_KB_URL:url},stdio:['ignore','pipe','pipe']});
+     const child=spawn(process.execPath,[fileURLToPath(new URL('../scripts/knowledge.mjs', import.meta.url)),'snapshot'],{env:{...process.env,TEAM_KB_TOKEN:'',TEAM_KB_URL:url},stdio:['ignore','pipe','pipe']});
      let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);child.on('error',reject);child.on('exit',code=>code===0?resolve(JSON.parse(out)):reject(new Error(err)));
     });
     assert.equal(snapshot.records.length,1);
