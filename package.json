@@ -2,27 +2,20 @@
   "name": "llm-wiki",
   "version": "0.0.0",
   "private": true,
-  "description": "llm-wiki monorepo: Skill core, workbench, and shared packages.",
+  "description": "Skill-based local knowledge service",
   "license": "MIT",
   "engines": {
     "node": ">=22.19.0"
   },
   "workspaces": [
-    "workbench/server",
-    "packages/*",
     "team-app"
   ],
   "scripts": {
-    "check:boundaries": "node --import tsx workbench/scripts/check-workbench-boundaries.mjs",
-    "check:privacy": "node workbench/scripts/check-repository-privacy.mjs",
-    "check:route-registry": "npm run build -w @llm-wiki/workbench-contracts && npm run build -w @llm-wiki/graph-engine && node --import tsx --test workbench/server/test/route-registry-parity.test.ts",
-    "dev": "npm run dev:team",
-    "dev:server": "npm run dev:team",
-    "quality-and-tests": "node workbench/scripts/run-quality-and-tests.mjs",
-    "test:boundaries": "node --import tsx --test workbench/scripts/check-workbench-boundaries.test.mjs",
-    "typecheck": "npm run check:boundaries && npm run typecheck --workspaces --if-present",
-    "dev:team": "npm run start -w @llm-wiki/team-app",
+    "dev": "npm run start -w @llm-wiki/team-app",
+    "dev:server": "npm run dev",
+    "dev:team": "npm run dev",
+    "test": "npm run test:team",
     "test:team": "npm run test -w @llm-wiki/team-app",
-    "dev:legacy": "npm run dev --workspace=@llm-wiki-agent/server"
+    "quality-and-tests": "npm run test:team"
   }
 }

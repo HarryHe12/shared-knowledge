@@ -1,13 +1,13 @@
 ---
 name: shared-knowledge
-description: 通过本地知识服务保存原始工作记录、查询默认知识库及其事项和证据。用于项目知识存取，不用于维护 Markdown wiki。
+description: 通过本地知识服务保存原始工作记录、查询默认知识库及其事项和证据。用于默认知识库的保存、查询和总结。
 ---
 
 # 知识存取
 
 项目客户端位于相对于本文件的 `../scripts/knowledge.mjs`。先解析其绝对路径，下文 CLIENT 代指该路径；所有存取逻辑保存在项目中，Skill 不复制客户端代码。后端通过仓库根 `npm run dev` 启动，默认只有一个知识库，不要求用户选择项目。
 
-个人令牌默认读取项目 `team-app/.data/token`（权限0600），可由 `TEAM_KB_TOKEN_FILE` 或 `TEAM_KB_TOKEN` 覆盖。缺失时请用户在终端配置，不让用户在聊天中发送令牌，不代建身份、读取凭证或绕过权限。
+个人令牌默认读取项目 `team-app/.data/token`（权限0600），可由 `TEAM_KB_TOKEN_FILE` 或 `TEAM_KB_TOKEN` 覆盖。默认验证模式允许没有令牌；仅在启用鉴权且请求未授权时请用户在终端配置。不让用户在聊天中发送令牌，不代建身份、读取凭证或绕过权限。
 
 - 存原文：把用户授权保存的文本写入临时 UTF-8 文件，执行 `node CLIENT save --file FILE --idempotency KEY`。同次写入重试复用 KEY；收到返回记录 ID 后才报告成功。默认不提取事项。
 - 用户要求结构化事项时，先 `node CLIENT extract --file FILE`，呈现草稿及歧义，用户确认后将 changes 数组写入 JSON 文件，再用 `save --file FILE --changes-file JSON --idempotency KEY` 保存。提取本身不落库。

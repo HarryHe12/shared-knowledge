@@ -1,6 +1,6 @@
 import { anchoredLookup, explicitOtherScope, queryFingerprint, unboundedAbsence, missingUserConstraint } from './query-policy.mjs';
 import {retrieve} from './retrieval.mjs';
-// Reuse the workbench's pi model registry and credential storage, without importing its running server.
+// Use pi model registry and credential storage directly.
 export async function createModel(){
  const {AuthStorage,ModelRegistry}=await import('@earendil-works/pi-coding-agent');
  const {complete}=await import('@earendil-works/pi-ai');
