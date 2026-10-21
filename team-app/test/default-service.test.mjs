@@ -29,7 +29,7 @@ test('headless HTTP and repository client save/read, deny unauthorized and non-d
  const user=store.user('tester',token);store.grant(p.id,user.id);
  const outsider=store.user('outsider','outsider');const other=store.project(user,'other');
  let calls=0;const model=async()=>{calls++;return JSON.stringify({action:'answer',answer:'本轮证据不足',quality:'insufficient',citations:[]});};
- const server=createKnowledgeServer(store,model,p);
+ const server=createKnowledgeServer(store,model,p,{allowLegacyTokens:true});
  server.listen(0,'127.0.0.1');await once(server,'listening');const url='http://127.0.0.1:'+server.address().port;
  const dir=await mkdtemp(join(tmpdir(),'knowledge-client-'));
  const request=(path,body,auth=token)=>fetch(url+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+auth,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
