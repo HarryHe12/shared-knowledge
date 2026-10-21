@@ -25,17 +25,18 @@ TEAM_USER_TOKEN='<至少24字符的个人随机令牌>' node team-app/src/server
 ```bash
 node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次写入唯一标识>'
 node team-app/scripts/knowledge.mjs snapshot
-node team-app/scripts/knowledge.mjs ask --question '目前的进展和阻塞是什么？'
-node team-app/scripts/knowledge.mjs reply --clarification-id '<ID>' --reply '我的判断标准'
+node team-app/scripts/knowledge.mjs search --query '目前进展和阻塞'
+node team-app/scripts/knowledge.mjs get --ids '<ID>,<ID>'
+node team-app/scripts/knowledge.mjs state
 ```
 
 保存原文默认不提取事项。需要时先 `extract --file FILE`，用户确认草稿后，将 changes 数组存为 JSON，再 `save --file FILE --changes-file JSON --idempotency KEY`。相同写入重试复用幂等标识；不自动重试。`snapshot` 的原文和事项是两次读取，不保证并发时原子一致。
 
-接口：`GET /api/default`、`GET/POST /api/records`、`GET /api/items`、`GET /api/timeline?item=ID`、`POST /api/extract`、`POST /api/ask`。兼容旧 `/api/projects/:默认库ID/*` 路径，`GET /api/projects` 仅返回默认库，禁止 HTTP 新建库或跨库访问。
+接口：`GET /api/default`、`GET/POST /api/records`、`GET /api/items`、`GET /api/timeline?item=ID`、`POST /api/extract`、`POST /api/search`、`POST /api/get-records`、`GET /api/state`。兼容旧 `/api/projects/:默认库ID/*` 路径，`GET /api/projects` 仅返回默认库，禁止 HTTP 新建库或跨库访问。
 
 ## 模型与检索
 
-问答、提取复用 `~/.pi/agent/auth.json` 和模型注册表；默认 `kimi-coding/k3`，用 `TEAM_PROVIDER`、`TEAM_MODEL` 改选。应用配置和数据库不存模型密钥。提取草稿经用户确认才落库；直接保存空事项列表只保存原始记录。
+可选提取复用 `~/.pi/agent/auth.json` 和模型注册表；默认 `kimi-coding/k3`，用 `TEAM_PROVIDER`、`TEAM_MODEL` 改选。应用配置和数据库不存模型密钥。提取草稿经用户确认才落库；直接保存空事项列表只保存原始记录。
 
 默认中文分词 + SQLite FTS5 BM25 + 项目全部事项当前状态证据。可选接入：
 
@@ -43,8 +44,6 @@ node team-app/scripts/knowledge.mjs reply --clarification-id '<ID>' --reply '我
 - `TEAM_RERANK_URL`：完整 rerank POST 地址；`TEAM_RERANK_MODEL`；`TEAM_RERANK_KEY`。协议为 `{model,query,documents,top_n}` → `{results:[{index,relevance_score}]}`，按返回顺序使用。
 
 向量缓存持久化，按项目、端点、模型和文本散列隔离；查询进行精确余弦扫描、与 BM25 做 RRF 融合。首次查询会依次为本项目记录建立缓存，适合小规模验证；后台预索引、批处理及 ANN 尚未实现。服务配置错误会显式失败，不伪装成成功启用。外部服务会接收到本次用户有权访问的项目文本。
-
-问答最多三次模型调用、两次关键词补查，引用必须属于统一证据集合。超时/无效模型结果会报错，不返回无依据答案。引用 ID 校验不等于语义事实已被验证。
 
 ## 重要边界
 
@@ -56,21 +55,12 @@ node team-app/scripts/knowledge.mjs reply --clarification-id '<ID>' --reply '我
 
 配置模板为 `.env.retrieval.example`，完整步骤、指标定义和当前结果见 [eval/README.md](eval/README.md)。支持显式 `TEAM_RETRIEVAL_MODE=bm25|vector|hybrid|hybrid-rerank`。只有配置并成功调用真实服务后，才能算真实模型验收。
 
-## 查询循环与用户澄清
+## 证据工具与 Agent 分工
 
-`ask` 接口现在返回 `answered`、`insufficient` 或 `needs_clarification`。模型在每轮选择补查、澄清或回答，最多三次调用；补查同样走已配置的混合召回与rerank。返回候选答案前检查格式、引用ID及证据要求；不合法的输出在剩余预算内自行修正。
+search 接受 query、limit（1—40，默认15）、strategy（hybrid 或 exact）和 depth（0—2，默认1）。hybrid 使用配置的检索模式并合并引用候选；exact 只做实体/编号展开。返回原文、作者、时间、范围和覆盖信息，不生成答案。coverage.exhaustive 始终为 false，truncated 只表示合并候选被 limit 截断，corpus_not_returned 表示未返回的库内记录数；这些不代表语义置信度或相关记录总数。
 
-需要用户才能确定的对象/时间/评价标准，返回一个具体问题、最多三个选项，Skill 呈现选项并接收自由输入。用户回复通过 `clarification_id` 与 `reply` 提交，服务端保留原问题和已澄清条件，重新检索后续答。不会把空检索、服务错误都解释成用户表达不清。
+get-records 接受1—40个 ids，返回当前范围内记录及 unavailable_ids；state 返回已登记事项的最新状态和来源记录。宿主 Agent 根据证据补查、澄清并回答，在当前对话维护上下文。生成模型按需加载，服务启动和证据查询不依赖生成模型；embedding/rerank 仍按配置调用。
 
-澄清状态存在独立数据库表，绑定用户和项目；30分钟有效，成功使用后不可重复提交，最多两次澄清（最多三段查询、九次模型调用）。服务失败允许重试。Skill 应保留并传回 clarification_id；过期待澄清数据尚未自动清理。语义充分性与何时澄清主要由模型判断，程序只做结构和引用检查，尚无独立事实验证器。
+默认 /api/ask 返回410，不创建服务端澄清会话。旧客户端 ask/reply 仅为迁移兼容保留，显式设置 TEAM_LEGACY_ASK=1 才开启历史循环。已有澄清数据不删除。历史58次试验只验证旧循环，不能代表新宿主 Agent 的端到端表现。
 
-工作场景循环测试、固定输入和已知失败见 [扩展验收报告](eval/loop-scenarios/REPORT-20261021.md)。
-
-## 查询策略可靠性修正
-
-- 明确提到另一个有权项目的名称且当前范围不同：返回范围限制，不读取其他项目内容，不要求再次确认名字。该程序规则仅使用调用者可见的项目目录；未知名称仍需模型判断，不能宣称覆盖所有名称歧义。
-- 每轮提供项目记录总数、当前证据数和非穷尽标记；缺少关键指标时可以先补查。程序对未限定范围的缺失声明作措辞检查，要求修正或继续查；预算耗尽仍不可靠则说明本轮证据不足。该检查是启发式，不能替代独立事实验证。
-- 补查将混合结果与低频词/中文二元片段/明确引用编号匹配合并，补充一跳引用记录。重复词集合或上轮零新增时改用精确匹配及两跳编号展开，不再对相近通用词重复发起相同检索层请求。
-- 精确补查额外记录最多12条、种子最多4条，始终限制在当前项目；每段仍最多3次模型调用、2次补查（包括模型主动列出的缺口），最多2次用户澄清。
-
-对高置信的“我之前定的标准”“我关心的周期”“我打算投的钱”等未给值条件，第一轮由程序先询问；已明确提供标准、日期或金额时不触发。普通进度总结、公开验收门槛和通用转发草稿不应因此被强制追问。复杂隐含条件仍由模型判断。
+本轮31项测试通过，覆盖真实本机HTTP与客户端存取、默认关闭问答、证据范围、状态来源和已有检索/循环回归。独立宿主端到端留出集验收尚未完成。
