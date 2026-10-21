@@ -20,7 +20,7 @@ try {
   if(projectId!==project.id)throw new Error('只能授权默认知识库');
   store.grant(project.id,userId);store.close();console.log('已授权');
  }else{
-  const server=createKnowledgeServer(store,await createModel(),project);
+  const server=createKnowledgeServer(store,await createModel(),project,{authRequired:process.env.TEAM_AUTH_REQUIRED==='1'});
   server.listen(Number(process.env.TEAM_PORT??5181),'127.0.0.1',()=>console.log('知识服务 http://127.0.0.1:'+(process.env.TEAM_PORT??5181)));
   const shutdown=()=>server.close(()=>{store.close();process.exit(0);});
   process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);

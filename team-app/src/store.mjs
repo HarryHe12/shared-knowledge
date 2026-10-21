@@ -22,6 +22,12 @@ export class Store {
  }
 
  user(name,token){const id=randomUUID();this.db.prepare('INSERT INTO users VALUES(?,?,?)').run(id,name,hash(token));return {id,name};}
+ localValidationUser(project){
+  const id='local-validation-user';
+  this.db.prepare('INSERT OR IGNORE INTO users VALUES(?,?,?)').run(id,'本地验证用户',hash(randomUUID()));
+  this.grant(project,id);
+  return this.db.prepare('SELECT id,name FROM users WHERE id=?').get(id);
+ }
  authenticate(token){return this.db.prepare('SELECT id,name FROM users WHERE token_hash=?').get(hash(token));}
  project(user,name){const id=randomUUID();this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT INTO projects VALUES(?,?)').run(id,name);this.grant(id,user.id);this.db.exec('COMMIT');return {id,name};}catch(e){this.db.exec('ROLLBACK');throw e;}}
  grant(project,user){this.db.prepare('INSERT OR IGNORE INTO members VALUES(?,?)').run(project,user);}

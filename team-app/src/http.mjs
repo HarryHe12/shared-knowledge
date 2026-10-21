@@ -2,7 +2,8 @@ import {createServer} from 'node:http';
 import {extract} from './intelligence.mjs';
 import {ask} from './query-loop.mjs';
 
-export function createKnowledgeServer(store, model, project) {
+export function createKnowledgeServer(store, model, project, {authRequired = true} = {}) {
+ const localUser = authRequired ? null : store.localValidationUser(project.id);
  return createServer(async(req,res)=>{
   const send=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
   res.setHeader('Cache-Control','no-store');
@@ -10,7 +11,7 @@ export function createKnowledgeServer(store, model, project) {
   try {
    const url=new URL(req.url,'http://localhost');
    if(!url.pathname.startsWith('/api/'))return send(404,{error:'仅提供知识库 API，请使用 Skill'});
-   const user=store.authenticate((req.headers.authorization??'').replace(/^Bearer /,''));
+   const user=localUser ?? store.authenticate((req.headers.authorization??'').replace(/^Bearer /,''));
    if(!user)return send(401,{error:'个人令牌无效'});
    if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`)return send(403,{error:'来源不允许'});
    store.access(user,project.id);

@@ -14,11 +14,10 @@ export async function run(args=process.argv.slice(2),env=process.env){
  if(url.username||url.password)throw new Error('服务地址不可包含凭证');
  if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname))throw new Error('仅连接本地 HTTP 知识服务');
  const tokenFile=values['token-file']??env.TEAM_KB_TOKEN_FILE??new URL('../.data/token',import.meta.url);
- const token=env.TEAM_KB_TOKEN??(tokenFile?(await readFile(tokenFile,'utf8')).trim():'');
- if(!token)throw new Error('请设置 TEAM_KB_TOKEN_FILE 或 TEAM_KB_TOKEN；不要在聊天中提供令牌');
+ const token=env.TEAM_KB_TOKEN??(await readFile(tokenFile,'utf8').catch(error=>{if(error.code==='ENOENT'&&!values['token-file']&&!env.TEAM_KB_TOKEN_FILE)return '';throw error;})).trim();
  const required=key=>{if(!values[key])throw new Error('缺少 --'+key);return values[key];};
  const request=async(path,body)=>{
-  const response=await fetch(new URL('/api/'+path,url),{method:body?'POST':'GET',redirect:'error',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(240000)});
+  const response=await fetch(new URL('/api/'+path,url),{method:body?'POST':'GET',redirect:'error',headers:{...(token?{Authorization:'Bearer '+token}:{}),'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(240000)});
   const result=await response.json();if(!response.ok)throw new Error('HTTP '+response.status+': '+(result.error??'请求失败'));return result;
  };
  let result;
