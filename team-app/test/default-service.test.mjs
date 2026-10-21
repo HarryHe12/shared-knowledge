@@ -56,6 +56,12 @@ test('headless HTTP and repository client save/read, deny unauthorized and non-d
   assert.equal((await client('get','--ids',saved.id)).records[0].text,text);
   assert.deepEqual((await client('state')).items,[]);
   assert.equal((await request('/api/ask',{question:'总结进展'})).status,410);assert.equal(calls,0);
+  await writeFile(file,'更正后的原文');
+  assert.equal((await client('correct','--id',saved.id,'--version','1','--file',file)).version,2);
+  assert.equal((await client('history','--id',saved.id)).revisions.length,1);
+  await client('withdraw','--id',saved.id,'--version','2');assert.equal((await client('get','--ids',saved.id)).records.length,0);
+  await client('restore','--id',saved.id,'--version','3');assert.equal((await client('get','--ids',saved.id)).records[0].text,'更正后的原文');
+  await client('purge','--id',saved.id,'--version','4');assert.equal((await client('get','--ids',saved.id)).records.length,0);
  }finally{await new Promise(r=>server.close(r));store.close();await rm(dir,{recursive:true,force:true});}
 });
 
