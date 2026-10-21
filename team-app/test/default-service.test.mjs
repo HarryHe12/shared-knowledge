@@ -66,3 +66,30 @@ test('database path reuses one existing file and refuses multiple candidates',as
   assert.equal(await databaseFile(root,'.data/demo.sqlite'),join(root,'.data/demo.sqlite'));
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('local validation accepts tokenless writes and keeps one author across server restarts',async()=>{
+ const store=new Store(':memory:');const p=store.defaultProject();
+ const other=store.project(store.user('other','other-token'),'other');
+ let saved;
+ try{
+  for(let i=0;i<2;i++){
+   const server=createKnowledgeServer(store,async()=>{},p,{authRequired:false});
+   server.listen(0,'127.0.0.1');await once(server,'listening');
+   const url='http://127.0.0.1:'+server.address().port;
+   try{
+    const response=await fetch(url+'/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'验证原文',idempotency:'stable'})});
+    assert.equal(response.status,200);const record=await response.json();
+    if(saved)assert.equal(record.id,saved.id);saved=record;
+    const snapshot=await new Promise((resolve,reject)=>{
+     const child=spawn(process.execPath,['team-app/scripts/knowledge.mjs','snapshot'],{env:{...process.env,TEAM_KB_TOKEN:'',TEAM_KB_URL:url},stdio:['ignore','pipe','pipe']});
+     let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);child.on('error',reject);child.on('exit',code=>code===0?resolve(JSON.parse(out)):reject(new Error(err)));
+    });
+    assert.equal(snapshot.records.length,1);
+    assert.equal((await fetch(url+'/api/projects/'+other.id+'/records')).status,404);
+    assert.equal((await fetch(url+'/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"text":""}'})).status,400);
+    assert.equal((await fetch(url+'/api/records',{headers:{Origin:'https://example.com'}})).status,403);
+   }finally{await new Promise(r=>server.close(r));}
+  }
+  assert.equal(saved.author_id,'local-validation-user');
+ }finally{store.close();}
+});
