@@ -96,5 +96,6 @@ export async function retrieve(store, user, project, query, options = {}) {
     notes.push('rerank');
   }
   unchanged();
+  store.access(user,project);
   return { hits: hits.slice(0, config.topK), description: notes.join(' + '), mode: config.mode };
 }

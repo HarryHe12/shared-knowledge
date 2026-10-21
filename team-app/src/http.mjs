@@ -1,9 +1,13 @@
+import {Auth} from './auth.mjs';
+import {authPage} from './auth-page.mjs';
 import {createServer} from 'node:http';
 import {extract} from './intelligence.mjs';
 import {ask} from './query-loop.mjs';
 import {searchRecords,getRecords,getState} from './evidence.mjs';
 
-export function createKnowledgeServer(store, model, project, {authRequired = true, legacyAsk = false} = {}) {
+export function createKnowledgeServer(store, model, project, {authRequired = true, legacyAsk = false, allowLegacyTokens = false} = {}) {
+ const auth=new Auth(store,project),defaultProject=project;
+ const attempts=new Map();
  const localUser = authRequired ? null : store.localValidationUser(project.id);
  return createServer(async(req,res)=>{
   const send=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
@@ -11,11 +15,15 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
   res.setHeader('X-Content-Type-Options','nosniff');
   try {
    const url=new URL(req.url,'http://localhost');
-   if(!url.pathname.startsWith('/api/'))return send(404,{error:'仅提供知识库 API，请使用 Skill'});
-   const user=localUser ?? store.authenticate((req.headers.authorization??'').replace(/^Bearer /,''));
-   if(!user)return send(401,{error:'个人令牌无效'});
-   if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`)return send(403,{error:'来源不允许'});
-   store.access(user,project.id);
+   if(req.method==='GET'&&['/account','/admin'].includes(url.pathname)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});return res.end(authPage);}
+   if(!url.pathname.startsWith('/api/'))return send(404,{error:'请使用 Skill 或 /account'});
+   let project=defaultProject;
+   const bearer=(req.headers.authorization??'').replace(/^Bearer /,'');
+   const cookie=/kb_session=([A-Za-z0-9_-]+)/.exec(req.headers.cookie??'')?.[1];
+   const sessionUser=auth.user(bearer||cookie);
+   const user=sessionUser ?? (allowLegacyTokens?store.authenticate(bearer):null) ?? (authRequired?null:localUser);
+   if(req.headers.origin&&req.headers.origin!==(process.env.TEAM_PUBLIC_URL?new URL(process.env.TEAM_PUBLIC_URL).origin:`http://${req.headers.host}`))return send(403,{error:'来源不允许'});
+
    let input={};
    if(req.method==='POST'){
     const chunks=[];let size=0;
@@ -23,6 +31,36 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
     try{input=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(new Error('JSON无效'),{status:400});}
     if(!input||typeof input!=='object'||Array.isArray(input))throw Object.assign(new Error('请求须为对象'),{status:400});
    }
+   if(url.pathname.startsWith('/api/auth/')){
+    const action=url.pathname.slice(10);
+    if(req.method==='POST'&&['register','login','device-start','device-poll'].includes(action)){
+     const key=req.socket.remoteAddress+':'+action,now=Date.now();
+     if(attempts.size>10000)for(const [k,v] of attempts)if(v.until<now)attempts.delete(k);
+     const rate=attempts.get(key)??{count:0,until:now+60000};if(rate.until<now){rate.count=0;rate.until=now+60000;}rate.count++;attempts.set(key,rate);
+     if(rate.count>(action==='device-poll'?60:10))return send(429,{error:'请求过于频繁，请稍后重试'});
+     if(action==='register')return send(201,await auth.register(input));
+     if(action==='device-start')return send(200,auth.start());
+     if(action==='device-poll')return send(200,auth.poll(input.device_token));
+     const result=await auth.login(input);res.setHeader('Set-Cookie','kb_session='+result.token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000'+(req.socket.encrypted||process.env.TEAM_PUBLIC_URL?.startsWith('https:')?'; Secure':''));return send(200,{ok:true});
+    }
+    if(!sessionUser)return send(401,{error:'请登录'});
+    if(req.method==='GET'&&action==='me')return send(200,auth.me(sessionUser));
+    if(req.method==='POST'&&action==='device-bind')return send(200,auth.bind(sessionUser,input.code));
+    if(req.method==='POST'&&action==='logout'){auth.db.prepare('DELETE FROM auth_sessions WHERE hash=?').run(sessionUser.session_hash);res.setHeader('Set-Cookie','kb_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return send(200,{ok:true});}
+    return send(404,{error:'未找到接口'});
+   }
+   if(url.pathname==='/api/admin'){
+    auth.admin(sessionUser);
+    if(req.method==='GET')return send(200,auth.overview(sessionUser));
+    if(req.method==='POST')return send(200,auth.manage(sessionUser,input));
+   }
+   if(!user)return send(401,{error:'请通过客户端 login 登录'});
+   if(sessionUser){
+    const scope=req.headers['x-knowledge-scope']??defaultProject.id;
+    auth.authorize(sessionUser,scope,req.method==='POST'&&!['search','get-records','ask'].includes(url.pathname.split('/').at(-1)));
+    project=store.db.prepare('SELECT * FROM projects WHERE id=?').get(scope);
+   }
+   store.access(user,project.id);
    if(req.method==='GET'&&url.pathname==='/api/projects')return send(200,[project]);
    if(req.method==='GET'&&url.pathname==='/api/default')return send(200,project);
    const parts=url.pathname.split('/').filter(Boolean);
@@ -49,6 +87,7 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
     result=await ask(store,model,user,project.id,input);
    }
    else return send(404,{error:'未找到接口'});
+   if(sessionUser){const current=auth.user(bearer||cookie);auth.authorize(current,project.id);}
    send(200,result);
   }catch(error){send(error.status??500,{error:error.status?error.message:'处理失败，请检查模型或服务配置'});}
  });
