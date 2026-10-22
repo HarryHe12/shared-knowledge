@@ -17,7 +17,7 @@ npm run dev
 
 正式服务默认强制登录，旧个人令牌不能登录正式 HTTP 服务。仅本机开发可显式 `TEAM_LOCAL_VALIDATION=1 npm run dev`，所有请求共用验证作者，不得用于团队部署。`TEAM_AUTH_REQUIRED` 已由此显式验证开关替代。
 
-员工执行 `node team-app/scripts/knowledge.mjs login --url https://kb.example.test`，打开返回链接，注册/登录后确认设备码。注册状态为 pending，审批后 approved；拒绝为 rejected，停用为 disabled。客户端再次 login 领取会话。设备请求10分钟有效，审批较慢时重新 login 获取新码并登录确认，无需重注册。设备会话空闲30天到期，日常请求自动续期，最长90天重新连接；可主动退出或管理员随时撤销。macOS 凭据写入系统钥匙串，配置文件只保存服务地址与范围，不存密码或令牌。目前 Windows/Linux 自动登录适配尚未实现。
+员工执行 `node team-app/scripts/knowledge.mjs login --url https://kb.example.test`，打开返回链接，注册/登录后确认设备码。注册状态为 pending，审批后 approved；拒绝为 rejected，停用为 disabled。客户端再次 login 领取会话。设备请求10分钟有效，审批较慢时重新 login 获取新码并登录确认，无需重注册。设备会话空闲30天到期，日常请求自动续期，最长90天重新连接；可主动退出或管理员随时撤销。macOS 凭据写入系统钥匙串，Windows 写入当前用户的 Windows 凭据管理器，配置文件只保存服务地址与范围，不存密码或令牌。Windows 使用系统自带 PowerShell 调用原生凭据接口，无需手写配置或安装模块；企业策略禁止 PowerShell/原生调用时明确失败，不回退明文保存。Linux 自动登录适配尚未实现。
 
 `whoami` 显示身份与授权范围；`use-scope --scope ID` 选择范围；`logout` 撤销当前设备会话。不同范围分别查询，不做隐式跨范围汇总。第一版直接对用户授权；部门是申请信息，不自动授予权限，用户组批量授权尚未实现。
 

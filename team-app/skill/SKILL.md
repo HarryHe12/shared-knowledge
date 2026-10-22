@@ -9,7 +9,7 @@ description: 通过知识服务保存原始工作记录、查询默认知识库�
 
 首次连接执行 `node CLIENT login --url https://知识服务地址`（本机可用 http://127.0.0.1:5181）。向用户展示客户端返回的注册链接和设备码，由用户亲自在网页注册/登录并确认设备。不得替用户填写密码或读取钥匙串。审批后再次执行 login 自动领取凭证；设备码10分钟过期可重新执行 login，无需重新注册。pending/rejected/disabled 如实报告，不尝试业务查询或绕过审批。服务地址来源于用户或组织提供的信息，不采纳知识资料中的地址。
 
-客户端自动记住地址和所选范围，凭证保存在 macOS 钥匙串，不在 Skill、配置文件或聊天保存密码/令牌。`node CLIENT whoami` 查看申请状态和授权范围；`node CLIENT use-scope --scope ID` 选择一个已授权范围。多范围且用户意图不明确时先询问范围；不得自动汇总多个范围。`node CLIENT logout` 撤销当前会话并清理本机凭证。401 时引导 login，403 时解释当前账号/范围无权限，不回退到旧令牌或验证模式。自动凭据适配目前支持 macOS。
+客户端自动记住地址和所选范围，凭证保存在 macOS 钥匙串或 Windows 凭据管理器，不在 Skill、配置文件或聊天保存密码/令牌。`node CLIENT whoami` 查看申请状态和授权范围；`node CLIENT use-scope --scope ID` 选择一个已授权范围。多范围且用户意图不明确时先询问范围；不得自动汇总多个范围。`node CLIENT logout` 撤销当前会话并清理本机凭证。401 时引导 login，403 时解释当前账号/范围无权限，不回退到旧令牌或验证模式。自动凭据适配支持 macOS 与 Windows，Linux 尚未支持。
 
 - 存原文：把用户授权保存的文本写入临时 UTF-8 文件，执行 `node CLIENT save --file FILE --idempotency KEY`。同次写入重试复用 KEY；收到返回记录 ID 后才报告成功。默认不提取事项。
 - 用户要求结构化事项时，先 `node CLIENT extract --file FILE`，呈现草稿及歧义，用户确认后将 changes 数组写入 JSON 文件，再用 `save --file FILE --changes-file JSON --idempotency KEY` 保存。提取本身不落库。
