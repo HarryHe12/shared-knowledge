@@ -11,5 +11,8 @@
 
 ## 分支与发布
 
+- 唯一发布目标为用户自己的仓库 `HarryHe12/shared-knowledge`，远程名 `origin`（`git@github.com:HarryHe12/shared-knowledge.git`）。推送、创建 PR 和合并前核对目标。
+- `upstream`（`sdyckjq-lab/llm-wiki-skill`）仅作为来源参考，不得向其推送、创建 PR 或合并；不得擅自将 `origin` 改回该仓库。
+
 代码变更从 main 创建 codex/feat-* 或 codex/fix-* 分支。按实现、测试、文档分步提交；推送后创建 PR，测试通过后在 GitHub 合并。纯文档修改不要求分支。
 每次功能变更推送前更新 CHANGELOG.md 和 README.md 功能说明；新增功能递增 changelog 版本。提交文档前检查个人路径、真实姓名与私有素材线索。
