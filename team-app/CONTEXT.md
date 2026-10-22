@@ -25,4 +25,4 @@
 
 - 账号流程：自主注册 pending，管理员核实身份并审批 approved/rejected；disabled 禁用账号并撤销会话。邮箱由管理员人工核实，尚未接邮件验证。
 - 范围：默认库保持原 ID，新建范围为独立 project；每位成员显式 reader/writer 授权，管理权不隐含资料阅读权。
-- Skill 不存密码和令牌；客户端凭据保存在 macOS 钥匙串。网页只承担账号与后台管理。
+- Skill 不存密码和令牌；客户端凭据保存在 macOS 钥匙串或 Windows 凭据管理器。网页只承担账号与后台管理。

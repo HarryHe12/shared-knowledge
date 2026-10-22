@@ -26,7 +26,7 @@ export async function run(args=process.argv.slice(2),env=process.env){
  if(command==='use-scope'){const current=await credential(service);const me=await authRequest('auth/me',undefined,current);if(!me.scopes.some(s=>s.id===values.scope))throw new Error('无此范围权限');await saveProfile({...saved,url:url.origin,scope:values.scope});console.log('已选择知识范围');return;}
  if(command==='whoami'){console.log(JSON.stringify(await authRequest('auth/me',undefined,await credential(service)),null,2));return;}
  const tokenFile=values['token-file']??env.TEAM_KB_TOKEN_FILE??new URL('../.data/token',import.meta.url);
- const token=(env.TEAM_KB_TOKEN??(await readFile(tokenFile,'utf8').catch(error=>{if(error.code==='ENOENT'&&!values['token-file']&&!env.TEAM_KB_TOKEN_FILE)return '';throw error;})).trim())|| (process.platform==='darwin'?await credential(service):'');
+ const token=(env.TEAM_KB_TOKEN??(await readFile(tokenFile,'utf8').catch(error=>{if(error.code==='ENOENT'&&!values['token-file']&&!env.TEAM_KB_TOKEN_FILE)return '';throw error;})).trim())|| (['darwin','win32'].includes(process.platform)?await credential(service):'');
  const required=key=>{if(!values[key])throw new Error('缺少 --'+key);return values[key];};
  const request=async(path,body)=>{
   const response=await fetch(new URL('/api/'+path,url),{method:body?'POST':'GET',redirect:'error',headers:{...(token?{Authorization:'Bearer '+token}:{}),'Content-Type':'application/json',...((values.scope??saved.scope)?{'X-Knowledge-Scope':values.scope??saved.scope}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(240000)});
