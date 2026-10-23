@@ -14,6 +14,7 @@ import {WxCrypto, xmlField, textReplyXml, encryptReplyXml, DEV_TOKEN, DEV_ENCODI
 import {WeCom} from './wecom.mjs';
 import {KnowledgeBase} from './kb.mjs';
 import {LLM} from './llm.mjs';
+import {handleAgentApi} from './agent-api.mjs';
 import {route, routeWithLLM, HELP_TEXT} from '../../librarian/scripts/router.mjs';
 import {answerQuestion} from '../../librarian/scripts/answer.mjs';
 
@@ -145,6 +146,8 @@ function respond(res, status, body, contentType = 'text/plain; charset=utf-8') {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://127.0.0.1');
+    // Agent API（/agent/ 前缀，Bearer token 鉴权，与企微回调完全隔离）
+    if (await handleAgentApi(req, res, url.pathname, kb, llm)) return;
     if (url.pathname !== '/wecom/callback') {
       respond(res, 404, 'not found');
       return;
