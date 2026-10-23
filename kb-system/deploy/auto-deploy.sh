@@ -13,12 +13,9 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 [ "$LOCAL" = "$REMOTE" ] && exit 0   # 没有新提交，收工
 
-if ! git merge --ff-only "$REMOTE"; then
-  echo "$(date '+%F %T') 合并失败（非快进），跳过 $REMOTE" >> "$LOG"
-  exit 1
-fi
-
-CHANGED=$(git diff --name-only "$LOCAL" "$REMOTE")
+CHANGED=$(git diff --name-only "$LOCAL" "$REMOTE" 2>/dev/null)
+# 浅克隆下两段历史看似无关，不能快进合并；部署机无本地改动，直接对齐到新提交
+git reset --hard "$REMOTE" -q || { echo "$(date '+%F %T') 切换到 $REMOTE 失败" >> "$LOG"; exit 1; }
 NEED_CORE=$(echo "$CHANGED" | grep -c '^team-app/' || true)
 NEED_COLLECTOR=$(echo "$CHANGED" | grep -c '^kb-system/' || true)
 
