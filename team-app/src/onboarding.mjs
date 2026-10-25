@@ -120,15 +120,20 @@ export class Onboarding {
     return {tenants, brands, stores};
   }
 
+  invitationUsable(invitation) {
+    if (!invitation || invitation.revoked_at || invitation.expires_at <= this.now()) return false;
+    try {
+      this.parents(invitation);
+      return this.canIssue({id: invitation.created_by}, invitation,
+        typeof invitation.roles === 'string' ? JSON.parse(invitation.roles) : invitation.roles);
+    } catch (error) { if (error.status) return false; throw error; }
+  }
+
   validInvitation(token) {
     if (typeof token !== 'string' || !/^kbinv_[A-Za-z0-9_-]{43}$/.test(token)) throw fail('邀请链接无效或已失效', 404);
     const invitation = this.db.prepare('SELECT * FROM onboarding_invitations WHERE token_hash=?').get(digest(token));
-    if (!invitation || invitation.revoked_at || invitation.expires_at <= this.now()) throw fail('邀请链接无效或已失效', 404);
+    if (!this.invitationUsable(invitation)) throw fail('邀请链接无效或已失效', 404);
     const parsed = {...invitation, roles: JSON.parse(invitation.roles)};
-    try {
-      this.parents(parsed);
-      if (!this.canIssue({id: invitation.created_by}, parsed, parsed.roles)) throw fail('邀请链接无效或已失效', 404);
-    } catch (error) { if (error.status) throw fail('邀请链接无效或已失效', 404); throw error; }
     return parsed;
   }
 
@@ -150,7 +155,8 @@ export class Onboarding {
     return {id: row.id, tenant_id: row.tenant_id, tenant_name: row.tenant_name, brand_id: row.brand_id,
       brand_name: row.brand_name, store_id: row.store_id, store_name: row.store_name,
       roles: typeof row.roles === 'string' ? JSON.parse(row.roles) : row.roles, created_by: row.created_by,
-      creator_name: row.creator_name, created_at: row.created_at, expires_at: new Date(row.expires_at).toISOString(), revoked_at: row.revoked_at};
+      creator_name: row.creator_name, created_at: row.created_at, expires_at: new Date(row.expires_at).toISOString(),
+      revoked_at: row.revoked_at, usable: this.invitationUsable(row)};
   }
 
   invitationRows() {

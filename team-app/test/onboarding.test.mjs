@@ -102,6 +102,7 @@ test('invitation secrets are hashed, bounded, revocable, and depend on live issu
   try {
     const candidate = f.user('申请人', 'pending'), invitation = f.invite();
     assert.ok(invitation.token.length > 40);
+    assert.equal(invitation.usable, true);
     const stored = f.store.db.prepare('SELECT * FROM onboarding_invitations WHERE id=?').get(invitation.id);
     assert.notEqual(stored.token_hash, invitation.token);
     assert.ok(!JSON.stringify(f.onboarding.invitations(f.manager)).includes(invitation.token));
@@ -109,15 +110,18 @@ test('invitation secrets are hashed, bounded, revocable, and depend on live issu
     assert.throws(() => f.invite(f.manager, {expires_in_days: 0}), status(400));
     const application = f.apply(candidate, invitation);
     f.onboarding.revokeInvitation(f.manager, invitation.id);
+    assert.equal(f.onboarding.invitations(f.owner).find(row => row.id === invitation.id).usable, false);
     assert.throws(() => f.onboarding.context(candidate, {invitation: invitation.token}), status(404));
     f.onboarding.review(f.manager, application.id, {decision: 'approved'});
     const expires = f.invite();
     f.store.db.prepare('UPDATE onboarding_invitations SET expires_at=? WHERE id=?').run(Date.now() - 1, expires.id);
     assert.throws(() => f.onboarding.context(candidate, {invitation: expires.token}), status(404));
+    assert.equal(f.onboarding.invitations(f.owner).find(row => row.id === expires.id).usable, false);
     const live = f.invite();
     f.manage({action: 'assignment', tenant_id: f.tenant.id, user_id: f.manager.id, role: 'store_manager', store_id: f.shop.id, active: false});
     assert.throws(() => f.onboarding.context(candidate, {invitation: live.token}), status(404));
     assert.throws(() => f.apply(candidate, live), status(404));
+    assert.equal(f.onboarding.invitations(f.owner).find(row => row.id === live.id).usable, false);
     const audit = JSON.stringify(f.store.db.prepare("SELECT * FROM access_audit WHERE action LIKE 'onboarding:%'").all());
     assert.ok(!audit.includes(invitation.token)); assert.ok(!audit.includes(candidate.email ?? '@example.test'));
   } finally { f.store.close(); }
