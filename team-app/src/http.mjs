@@ -8,10 +8,13 @@ import {Channels} from './channels.mjs';
 import {ChatService} from './chat.mjs';
 import {versionedHttp} from './versioned-http.mjs';
 import {organizationPage} from './organization-page.mjs';
+import {Onboarding} from './onboarding.mjs';
+import {OnboardingPage} from './onboarding-page.mjs';
 
 export function createKnowledgeServer(store, model, project, {authRequired = true, legacyAsk = false, allowLegacyTokens = false} = {}) {
  const auth=new Auth(store,project),defaultProject=project;
  const channels=new Channels(store,auth),chat=new ChatService(store,model,auth);
+ const onboarding=new Onboarding(store,auth);
  const attempts=new Map();
  const localUser = authRequired ? null : store.localValidationUser(project.id);
  return createServer(async(req,res)=>{
@@ -20,7 +23,7 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
   res.setHeader('X-Content-Type-Options','nosniff');
   try {
    const url=new URL(req.url,'http://localhost');
-   if(req.method==='GET'&&['/account','/admin','/organization'].includes(url.pathname)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});return res.end(url.pathname==='/organization'?organizationPage:authPage);}
+   if(req.method==='GET'&&['/account','/admin','/organization','/join','/approvals'].includes(url.pathname)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",'Referrer-Policy':'no-referrer'});return res.end(['/join','/approvals'].includes(url.pathname)?OnboardingPage:url.pathname==='/organization'?organizationPage:authPage);}
    if(!url.pathname.startsWith('/api/'))return send(404,{error:'请使用 Skill 或 /account'});
    let project=defaultProject;
    const bearer=(req.headers.authorization??'').replace(/^Bearer /,'');
@@ -45,7 +48,13 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
     const rate=attempts.get(key)??{count:0,until:now+60000};if(rate.until<now){rate.count=0;rate.until=now+60000;}rate.count++;attempts.set(key,rate);
     if(rate.count>(url.pathname.endsWith('/bridge')?300:20))return send(429,{error:'请求过于频繁，请稍后重试'});
    }
-   if(await versionedHttp({req,url,input,send,store,model,auth,channels,chat,bearer,cookie,sessionUser}))return;
+   if(url.pathname.startsWith('/api/v1/onboarding/')&&['POST','DELETE'].includes(req.method)&&sessionUser){
+    const key='onboarding:'+sessionUser.id,now=Date.now();
+    if(attempts.size>10000)for(const [k,v] of attempts)if(v.until<now)attempts.delete(k);
+    const rate=attempts.get(key)??{count:0,until:now+60000};if(rate.until<now){rate.count=0;rate.until=now+60000;}rate.count++;attempts.set(key,rate);
+    if(rate.count>60)return send(429,{error:'操作过于频繁，请稍后重试'});
+   }
+   if(await versionedHttp({req,url,input,send,store,model,auth,channels,chat,onboarding,bearer,cookie,sessionUser}))return;
    if(url.pathname.startsWith('/api/auth/')){
     const action=url.pathname.slice(10);
     if(req.method==='POST'&&['register','login','device-start','device-poll'].includes(action)){

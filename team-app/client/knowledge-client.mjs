@@ -149,6 +149,34 @@ export class KnowledgeClient {
     return result;
   }
   me() { return this.#request('me'); }
+  onboardingContext(invitation) {
+    return this.#request('onboarding/context', {method: 'POST', body: {invitation: id(invitation)}});
+  }
+  myApplications() { return this.#request('onboarding/applications'); }
+  applyMembership(input) {
+    const body = fields(input, ['invitation', 'role', 'brand_id', 'store_id', 'note']);
+    body.invitation = id(body.invitation);
+    for (const field of ['brand_id', 'store_id']) if (body[field] !== undefined) body[field] = id(body[field]);
+    return this.#request('onboarding/applications', {method: 'POST', body});
+  }
+  cancelApplication(applicationId) {
+    return this.#request(`onboarding/applications/${encodeURIComponent(id(applicationId))}`, {method: 'DELETE'});
+  }
+  reviewContext() { return this.#request('onboarding/review-context'); }
+  pendingApplications() { return this.#request('onboarding/reviews'); }
+  reviewApplication(applicationId, input) {
+    return this.#request(`onboarding/reviews/${encodeURIComponent(id(applicationId))}`, {method: 'POST',
+      body: fields(input, ['decision', 'note'])});
+  }
+  invitations() { return this.#request('onboarding/invitations'); }
+  createInvitation(input) {
+    const body = fields(input, ['tenant_id', 'brand_id', 'store_id', 'roles', 'expires_in_days']);
+    for (const field of ['tenant_id', 'brand_id', 'store_id']) if (body[field] !== undefined) body[field] = id(body[field]);
+    return this.#request('onboarding/invitations', {method: 'POST', body});
+  }
+  revokeInvitation(invitationId) {
+    return this.#request(`onboarding/invitations/${encodeURIComponent(id(invitationId))}`, {method: 'DELETE'});
+  }
   async logout() {
     const usedToken = this.#token;
     try { return await this.#request('logout', {method: 'POST', body: {}}); }

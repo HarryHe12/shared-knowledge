@@ -10,12 +10,12 @@ const integer = (value, fallback, max) => {
 
 // Every client uses the same business API. Channel restrictions apply to raw
 // evidence and history as well as to generated answers, including after awaits.
-export async function versionedHttp({req, url, input, send, store, model, auth, channels, chat, bearer, cookie, sessionUser}) {
+export async function versionedHttp({req, url, input, send, store, model, auth, channels, chat, onboarding, bearer, cookie, sessionUser}) {
   if (!url.pathname.startsWith('/api/v1/')) return false;
   const path = url.pathname.slice('/api/v1/'.length);
   const method = req.method;
   if (path === 'capabilities' && method === 'GET') {
-    send(200, {api_version: 1, audience: 'staff', features: ['organizations', 'channels', 'conversations', 'records', 'state', 'citations'], transport: 'https-json'});
+    send(200, {api_version: 1, audience: 'staff', features: ['organizations', 'onboarding', 'channels', 'conversations', 'records', 'state', 'citations'], transport: 'https-json'});
     return true;
   }
   const login = /^channels\/([^/]+)\/(login|bridge)$/.exec(path);
@@ -68,6 +68,27 @@ export async function versionedHttp({req, url, input, send, store, model, auth, 
     if (channel) channels.revoke(bearer);
     else auth.db.prepare('DELETE FROM auth_sessions WHERE hash=?').run(user.session_hash);
     result = {ok: true};
+  } else if (path.startsWith('onboarding/')) {
+    if (channel) throw fail('请通过员工账号登录入职和审核页面', 403);
+    const actor = current().user;
+    if (path === 'onboarding/context' && method === 'POST') result = onboarding.context(actor, input);
+    else if (path === 'onboarding/applications') {
+      if (method === 'GET') result = {applications: onboarding.mine(actor)};
+      else if (method === 'POST') result = onboarding.apply(actor, input);
+    } else if (/^onboarding\/applications\/[^/]+$/.test(path) && method === 'DELETE') {
+      result = onboarding.cancel(actor, path.split('/')[2]);
+    } else if (path === 'onboarding/review-context' && method === 'GET') {
+      result = onboarding.reviewContext(actor);
+    } else if (path === 'onboarding/reviews' && method === 'GET') {
+      result = {applications: onboarding.pending(actor)};
+    } else if (/^onboarding\/reviews\/[^/]+$/.test(path) && method === 'POST') {
+      result = onboarding.review(actor, path.split('/')[2], input);
+    } else if (path === 'onboarding/invitations') {
+      if (method === 'GET') result = {invitations: onboarding.invitations(actor)};
+      else if (method === 'POST') result = onboarding.createInvitation(actor, input);
+    } else if (/^onboarding\/invitations\/[^/]+$/.test(path) && method === 'DELETE') {
+      result = onboarding.revokeInvitation(actor, path.split('/')[2]);
+    }
   } else if (path.startsWith('admin/')) {
     if (channel) throw fail('请通过员工账号管理页面操作', 403);
     current();
