@@ -15,6 +15,7 @@ export function history(store,user,project,id){
 }
 export function mutate(store,user,project,input,action,hash){
  store.access(user,project);
+ if(store.organization?.isManaged(project))store.organization.authorize(user,project,true);
  if(typeof input.id!=='string'||!Number.isInteger(input.version)||input.version<1)throw fail('需要记录id和当前version');
  const db=store.db;db.exec('BEGIN IMMEDIATE');
  try{

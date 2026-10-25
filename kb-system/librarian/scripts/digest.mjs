@@ -11,6 +11,7 @@
 import {writeFile, mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {allowLegacyExport} from './export-policy.mjs';
 import {KnowledgeBase} from '../../collector/src/kb.mjs';
 import {LLM} from '../../collector/src/llm.mjs';
 import {extractAuthor, stripHeader} from './answer.mjs';
@@ -46,6 +47,7 @@ async function main() {
   }
 
   const kb = new KnowledgeBase(process.env.KB_URL);
+  if (!await allowLegacyExport(kb)) {console.log('旧 Wiki/静态摘要导出默认停用；公司知识请通过受控聊天查询。');return;}
   const llm = new LLM();
   const all = await kb.records();
   const list = Array.isArray(all) ? all : (all?.records ?? []);
