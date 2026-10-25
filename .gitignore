@@ -32,4 +32,5 @@ deps/baoyu-url-to-markdown/scripts/bun.lock
 
 # Local knowledge data and generated results
 /team-app/.data/
+/kb-system/collector/.data/
 /test-results/
