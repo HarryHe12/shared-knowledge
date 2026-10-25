@@ -1,81 +1,26 @@
-# Agent 接入指南 —— 让任何 Agent 用上团队知识库
+# 电脑 Agent 接入
 
-团队知识库对外提供了一组简单的 HTTP 接口。任何 Agent（WorkBuddy、Codex、Claude、自研脚本……）只要能发 HTTPS 请求，就能往里投喂信息、提问、检索原始记录。
+Codex、Claude Code、Workbuddy 等共用知识服务，调用权限属于实际员工，不属于 Agent 名称。推荐加载仓库的 [shared-knowledge Skill](../../team-app/skill/SKILL.md)，或使用 [共享 SDK](../../team-app/client/knowledge-client.mjs)。
 
-**基础地址**：`https://kb.billiclaw.cn`
-
-**鉴权**：每个 Agent 发一把专属钥匙（API Key），请求时放在请求头里：
-
-```
-Authorization: Bearer <你的Key>
-```
-
-钥匙找李任重领取。谁用哪把钥匙，后台都有记录；钥匙泄露可以随时吊销换新。
-
----
-
-## 四个接口
-
-### 1. 自检 `GET /agent/ping`
+## 员工连接
 
 ```bash
-curl https://kb.billiclaw.cn/agent/ping \
-  -H "Authorization: Bearer <你的Key>"
+node team-app/scripts/knowledge.mjs login --url https://kb.example.test
+node team-app/scripts/knowledge.mjs whoami
+node team-app/scripts/knowledge.mjs use-scope --scope '<获准范围ID>'
 ```
 
-返回 `{ "ok": true, "agent": "workbuddy", ... }` 就说明通了。
+在浏览器核对设备码、登录并确认设备；账号需经审批、加入公司及岗位授权。凭证保存在受支持的系统凭据存储，不能把其他员工会话或公司桥接密钥发给 Agent。服务地址和范围可保存，密码不进入命令参数。
 
-### 2. 投喂 `POST /agent/feed`
+现有 Skill 按单范围调用 search/get/state，由宿主 Agent 组织证据回答。新 SDK/API 可显式汇总同公司内全部获准范围，并提供私有聊天、幂等发送、轮询和记录生命周期操作。复杂任务读取同样要经过权限，不允许直接读取 SQLite 或共享 Wiki 文件绕过服务。
 
-```bash
-curl -X POST https://kb.billiclaw.cn/agent/feed \
-  -H "Authorization: Bearer <你的Key>" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "10-23 下午完成了支付模块的联调，接口已上测试环境"}'
-```
+## 兼容采集端 Agent 网关
 
-返回里带记录编号（`shortId`）。**建议**：投喂时最好在 text 里写清楚是谁、哪天、什么事，以后查起来才准。
-可选字段：`idempotency`（传一个你自己的唯一 ID，重复提交会去重）、`occurredAt`（事情发生时间，ISO 格式，默认按提交时间）。
+- `GET /agent/ping`：当前员工和获准范围。
+- `POST /agent/feed`：保存 `{text,idempotency,occurredAt?}`，或通过 `Idempotency-Key` 提供稳定标识。
+- `POST /agent/search`：检索 `{query,limit?}`。
+- `POST /agent/ask`：问答 `{question}`。
 
-### 3. 提问 `POST /agent/ask`
+所有请求必须携带员工 `Authorization: Bearer ...`，后三个接口还需 `X-Knowledge-Scope`。如额外启用 `AGENT_API_KEYS=name:key,...`，通过 `X-Agent-Key` 传递网关凭据；它不能代替员工 Bearer。
 
-```bash
-curl -X POST https://kb.billiclaw.cn/agent/ask \
-  -H "Authorization: Bearer <你的Key>" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "支付模块现在进展到哪一步了？"}'
-```
-
-返回 `answer` 字段——知识库助理整理好的自然语言答案。支持"昨天""上周"这类相对日期，支持中文人名。**注意**：回答需要检索 + 大模型整理，耗时几秒到二十几秒，超时时间请设到 60 秒以上。
-
-### 4. 检索 `POST /agent/search`
-
-```bash
-curl -X POST https://kb.billiclaw.cn/agent/ask \
-  -H "Authorization: Bearer <你的Key>" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "支付模块", "limit": 10}'
-```
-
-返回原始记录列表（id、时间、正文）。适合 Agent 想自己组织答案、或批量分析的场景。`limit` 最大 30。
-
----
-
-## 给你的 Agent 的配置话术
-
-如果你用的 Agent 支持"自定义工具/指令"，把下面这段贴给它就行：
-
-> 我有一个团队知识库，地址 https://kb.billiclaw.cn，调用时请求头带 `Authorization: Bearer <你的Key>`。
-> - 投喂：POST /agent/feed，JSON 体 {"text": "..."}
-> - 提问：POST /agent/ask，JSON 体 {"question": "..."}，返回答案在 answer 字段
-> - 检索：POST /agent/search，JSON 体 {"query": "..."}
-> 当你处理了与我们工作相关的事情，或者产出了值得留存的结论，请顺手投喂一条；当问题可能和团队历史工作有关时，先问知识库再回答我。
-
----
-
-## 边界与规矩
-
-- 只走 HTTPS，不要在代码里硬编码 Key 后提交到任何仓库
-- 投喂内容进的是公司共享知识库，**别投喂密码、密钥、个人隐私信息**
-- 单条最长 20000 字符；检索每次最多返回 30 条
-- 接口有调用日志，异常调用会被发现并吊销钥匙
+旧版把应用密钥当 Bearer、把 author 字段当员工身份的调用方式已停用，需要迁移。写入重试复用原幂等标识，不能重复生成新标识。详细 API 和未来小程序接入见 [服务说明](../../team-app/README.md)。

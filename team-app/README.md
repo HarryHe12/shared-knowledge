@@ -1,89 +1,198 @@
-# 本地知识服务
+# 公司内部知识服务
 
-通过 Skill 使用授权知识范围，网页仅用于账号和管理。后端、存取客户端和 Skill 入口均保存在本项目。需要仓库依赖和 Node >=22.19；SQLite 使用 Node 内置 node:sqlite。
+微信、电脑 Agent 和未来的内部小程序共用一个知识服务。所有入口只供公司内部员工使用，每次读取、保存、生成答案都检查当前公司、品牌、门店和岗位权限。
 
-## 启动与身份
+本版实现后端、组织管理页面、接入 SDK 和企业微信适配器；不包含小程序页面，没有替生产环境部署、导入真实员工或配置微信凭据。原有 SQLite 数据、默认库 ID、作者和授权保留，旧库不会自动归入某家公司。
 
-第一版采用自主注册、管理员人工核实身份后审批。网页 `/account` 用于注册登录和设备确认，`/admin` 用于审批、范围授权、成员停用、设备撤销和审计。邮箱暂未自动验证，管理员应通过组织通讯录或线下确认身份后批准；界面不会将填写邮箱视为已验证。
+## 12 家门店应该怎样组织
 
-首次部署由运维在服务所在机器运行：
+把它理解为有门禁的档案室：微信、小程序和 Agent 是不同入口，进入后访问同一份资料。
+
+```mermaid
+flowchart TB
+  W[企业微信 / 微信插件] --> Q[验签、持久队列、员工身份桥接]
+  A[电脑 Agent] --> S[员工设备登录 + Skill / SDK]
+  M[未来品牌内部小程序] -. wx.login + SDK .-> API
+  Q --> API[统一知识服务 /api/v1]
+  S --> API
+  API --> ACL[公司成员 + 岗位 + 应用范围上限]
+  ACL --> R[原始记录、作者、时间和修订]
+  ACL --> C[个人对话与持久请求]
+  R --> I[全文 / 可选向量检索]
+  R --> T[经确认的事项和状态历史]
+  I --> L[有限预算的模型问答]
+  T --> L
+  L --> E[带来源和覆盖限制的回答]
+```
+
+建议第一阶段建一家真实公司，下面建立真实品牌和 12 家真实门店。每家店至少两个范围：“员工协作”和“店长管理”；另建公司公共资料和负责人资料。装修、培训、采购、维修等放入范围内的事项，不必为每条消息建立知识库。
+
+| 身份 | 默认可读取 | 默认可录入 |
+| --- | --- | --- |
+| 店员 | 本店员工范围、所属品牌员工资料、公司公共资料 | 本店员工范围 |
+| 店长 | 本店员工及管理范围、所属品牌员工资料、公司公共资料 | 本店员工及管理范围 |
+| 品牌负责人 | 本品牌各店员工和管理范围、公司公共资料 | 本品牌员工和管理范围 |
+| 公司负责人 | 本公司全部有效范围 | 本公司全部有效范围 |
+| 平台管理员 | 组织和账号配置；业务资料需另外授予公司身份 | 同左 |
+
+入口上限还会进一步收窄权限。公司负责人进入胡叨叨品牌小程序，也只能读取该品牌的范围；公司总部或其他品牌资料应通过公司级入口查询。品牌入口不会自动获得公司公共范围，可在品牌范围内另行发布经过批准的公共资料副本。
+
+同店员工范围中的资料由本店所有获准成员共享，目前没有范围内“仅本人可见”。工资、人事等应放入独立管理/负责人范围。保密级别由管理员建立范围，员工选择保存位置，模型不会擅自改变保密级别。
+
+平台管理员可在 `/admin` 追加 reader/writer 例外授权，接收人必须仍是公司有效成员。例外可扩大岗位权限，应审慎授予；撤销例外后恢复岗位权限，不代表显式禁止。writer 能更改自己的记录，不能改写他人的原始记录。
+
+## 为什么保留现有内核
+
+现有原始记录、版本纠错、事项、全文检索和可选向量检索可以继续使用。关键改动是将身份与权限集中到内核，让所有入口共用，而不是分别建立微信知识库和小程序知识库。
+
+数据按用途区分：
+
+1. **原始记录**：员工实际说了什么、谁说的、什么时候发生、什么时候录入，是可追溯来源。
+2. **事项状态**：例如“二店冷柜维修”，有状态、责任人、截止时间和来源。AI 只生成待确认草稿，员工确认后才提交；直接聊天保存原文不会自动产生已确认事项。
+3. **检索索引**：帮助找到相关原文。必须先授权，再检索，索引本身不能授予权限。
+4. **个人对话和回答**：属于具体员工及具体入口。引用带版本，资料或权限变化后旧回答失效，需要重新查；回答不是新的事实来源。
+
+发生时间和录入时间分别保存，晚录入的旧消息不会简单覆盖更新状态。当前状态按有效事件的发生时间推导，这是系统规则，不证明员工陈述必然正确；相互矛盾的信息需要保留双方来源并核实。
+
+现阶段选择“全文 + 可选向量混合检索 + 经确认事项 + 有来源问答”。图谱以后可用于供应商、设备、项目与门店的复杂关系，不能代替权限或事实来源。微软 [GraphRAG 官方索引方法](https://microsoft.github.io/graphrag/index/methods/)解释了各方法的成本差异，初期不必先做高成本全量图谱。
+
+未来正式向多家公司提供服务时，可迁移 PostgreSQL 并加数据库行级权限作为第二道边界，参见 [PostgreSQL 官方文档](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)。当前是 SQLite + 应用层逻辑隔离，未实现 PostgreSQL、数据库行级隔离、租户独立密钥或多机部署。
+
+## 启动及第一次设置
+
+需要 Node >=22.19 和 npm，在仓库根目录执行：
 
 ```bash
+npm ci
 node team-app/src/server.mjs bootstrap-admin
 npm run dev
 ```
 
-初始化交互输入姓名、邮箱和密码（不回显，至少12字符）；已存在管理员时拒绝再次初始化。服务端使用随机盐 scrypt 保存密码，不保存明文。初始管理员仅有管理权，没有业务阅读权，需在后台明确授予范围权限。
+初始化交互输入姓名、邮箱、密码，密码不回显，至少 12 字符；已有管理员时拒绝重复初始化。密码使用随机盐 scrypt。初始管理员不自动获得业务阅读权。
 
-正式服务默认强制登录，旧个人令牌不能登录正式 HTTP 服务。仅本机开发可显式 `TEAM_LOCAL_VALIDATION=1 npm run dev`，所有请求共用验证作者，不得用于团队部署。`TEAM_AUTH_REQUIRED` 已由此显式验证开关替代。
+服务默认只监听 `127.0.0.1:5181`。推荐按以下顺序试点：
 
-员工执行 `node team-app/scripts/knowledge.mjs login --url https://kb.example.test`，打开返回链接，注册/登录后确认设备码。注册状态为 pending，审批后 approved；拒绝为 rejected，停用为 disabled。客户端再次 login 领取会话。设备请求10分钟有效，审批较慢时重新 login 获取新码并登录确认，无需重注册。设备会话空闲30天到期，日常请求自动续期，最长90天重新连接；可主动退出或管理员随时撤销。macOS 凭据写入系统钥匙串，Windows 写入当前用户的 Windows 凭据管理器，配置文件只保存服务地址与范围，不存密码或令牌。Windows 使用系统自带 PowerShell 调用原生凭据接口，无需手写配置或安装模块；企业策略禁止 PowerShell/原生调用时明确失败，不回退明文保存。Linux 自动登录适配尚未实现。
+1. 在 `/account` 登录管理员，在 `/organization` 创建公司，页面会将创建人设为公司负责人。
+2. 创建实际品牌，批量粘贴门店名，每行一家，自动建立每店员工和管理范围。重复提交跳过已建门店和同名范围。
+3. 员工在 `/account` 申请；管理员先线下或通过公司通讯录核实，再在 `/admin` 批准。邮箱尚未自动验证。
+4. 将获准账号加入公司，再分配店员、店长或品牌负责人岗位。账号页面显示员工编号，公司负责人可据此添加成员。
+5. 建立公司公共和负责人资料范围，先用两家店的非敏感资料演练保存、查询、纠错、撤回和跨店拒绝，再逐步放开 12 家店。
+6. 登记企业微信入口，配置服务器桥接凭据，核实并绑定企业微信 UserID，完成后启用入口。
 
-`whoami` 显示身份与授权范围；`use-scope --scope ID` 选择范围；`logout` 撤销当前设备会话。不同范围分别查询，不做隐式跨范围汇总。第一版直接对用户授权；部门是申请信息，不自动授予权限，用户组批量授权尚未实现。
+组织页可停用公司、品牌、门店、知识范围、应用和身份绑定。离职要停用公司成员或账号，不能只改名字。停用成员会清除岗位与例外授权并撤销接入会话，重新入职需要重新授权；撤销岗位也会撤销本公司接入会话。关闭公司/品牌/范围阻止当前访问，不删除原记录。公司停用后需平台管理员恢复，页面只向平台管理员显示公司停用按钮。
 
-远程部署在受控服务器保存数据库，通过 HTTPS 反向代理访问；设置 `TEAM_PUBLIC_URL=https://kb.example.test`，代理保留原始 Host。需要容器监听时设置 `TEAM_HOST=0.0.0.0`，仅允许代理访问内部端口。服务不自行签发证书。客户端只允许远程 HTTPS 或本机 HTTP，拒绝重定向。注册/登录按来源地址限流；反向代理后也应配置入口限流。生产使用前仍需完成部署、邮件验证及系统凭据适配的验收。
+远程部署设置 `TEAM_PUBLIC_URL=https://kb.example.test`，通过 HTTPS 反向代理；需要容器监听可设 `TEAM_HOST=0.0.0.0`，内部端口只允许代理访问，保留 Host 并配置入口限流。普通会话空闲 30 天、最长 90 天；应用会话 1 小时，都可撤销。模型处理期间与返回前会重新检查权限。
 
-审批与授权相互独立：approved 但没有范围授权仍不可读写。范围 reader 只读；writer 可提交、提取草稿和更改本人记录。管理权限不隐含业务权限。每个范围复用独立 project ID，原默认库保持原ID；后台只显式登记原默认库和新建范围，不自动暴露其他旧项目。新账号没有旧库权限，旧记录作者不自动改写或合并。
+仅本机实验可使用 `TEAM_LOCAL_VALIDATION=1 npm run dev`，旧接口共用验证作者；不适用于公司部署，新 `/api/v1` 仍要求员工登录。
 
-空目录的新库固定在 `team-app/.data/team.sqlite`；`.data/` 已有唯一 `.sqlite` 文件时自动沿用，多个文件时要求 `TEAM_DB` 明确选择，不受启动目录影响（旧版根目录 `node` 与 npm workspace 启动可能分别产生两个 `.data` 位置，升级前请检查并用 TEAM_DB 指定已有库，不自动合并）。`TEAM_DB` 可覆盖路径，相对路径按 team-app 目录解析。备份时停止服务再复制数据库。空库自动创建默认库，唯一旧项目自动沿用；有多个旧项目时必须先设置 `TEAM_DEFAULT_PROJECT_ID`。选择会持久化，后续不允许环境变量切换默认库；其他项目数据保留但不通过服务暴露。
+## 企业微信和电脑 Agent
 
-## Skill 与客户端
+企业微信部署见 [采集服务说明](../kb-system/README.md)。收到消息后验签、解密、校验企业和应用，以 MsgId 持久入队，再按绑定员工调用统一聊天服务。“进入队列”不等于“已保存”，最终另发结果。
 
-入口是 [skill/SKILL.md](skill/SKILL.md)，客户端是 [scripts/knowledge.mjs](scripts/knowledge.mjs)。Skill 的存取实现以仓库脚本为准，不在安装目录另存一份业务逻辑。可在 AI 宿主中加载该入口；若安装宿主入口，保留指向本仓库客户端的路径。
+发送 `范围` 查看权限，`/范围 完整编号或名称` 选择保存或查询范围，`/范围 全部` 恢复公司内授权范围汇总。有多个保存目标时先选一个，再重发原文；不会广播保存到多家店。图片、附件、未转写语音不会以占位符冒充已收录。
 
-客户端默认使用系统钥匙串会话。旧 `TEAM_KB_TOKEN` / token-file 参数仅供显式开启 legacyTokens 的测试适配器；正式服务不接受旧个人令牌，不要再手工配置令牌。服务地址与范围可通过 login/use-scope 自动记住。
+电脑端继续使用 [Skill](skill/SKILL.md) 和 [客户端](scripts/knowledge.mjs)：
 
 ```bash
-node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次写入唯一标识>'
-node team-app/scripts/knowledge.mjs snapshot
-node team-app/scripts/knowledge.mjs search --query '目前进展和阻塞'
-node team-app/scripts/knowledge.mjs get --ids '<ID>,<ID>'
+node team-app/scripts/knowledge.mjs login --url https://kb.example.test
+node team-app/scripts/knowledge.mjs whoami
+node team-app/scripts/knowledge.mjs use-scope --scope '<范围ID>'
+node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次唯一标识>'
+node team-app/scripts/knowledge.mjs search --query '冷柜维修进展'
 node team-app/scripts/knowledge.mjs state
 ```
 
-保存原文默认不提取事项。需要时先 `extract --file FILE`，用户确认草稿后，将 changes 数组存为 JSON，再 `save --file FILE --changes-file JSON --idempotency KEY`。相同写入重试复用幂等标识；不自动重试。`snapshot` 的原文和事项是两次读取，不保证并发时原子一致。
+员工在浏览器确认本人设备，凭证保存在 macOS 钥匙串或 Windows 凭据管理器，不在配置文件或命令参数中；Linux 自动凭据适配尚未实现。Agent 名称和应用密钥不能赋予员工权限。现有 Skill 按单范围查询；公司汇总使用新 SDK/API 显式提供同公司的已授权范围。未提供 MCP Server，将来可在这些工具上增加符合官方授权规范的 MCP 适配。
 
-接口：`GET /api/default`、`GET/POST /api/records`、`GET /api/items`、`GET /api/timeline?item=ID`、`POST /api/extract`、`POST /api/search`、`POST /api/get-records`、`GET /api/state`。兼容旧 `/api/projects/:默认库ID/*` 路径，`GET /api/projects` 仅返回默认库，普通业务接口禁止新建库，范围由管理员后台建立，跨范围请求必须具备对应授权。
+## 未来内部小程序接入
 
-## 模型与检索
+服务器已实现应用登记、范围上限、员工绑定、官方登录交换与 SDK 请求适配；本次不接入小程序页面。以后每个品牌需要：
 
-可选提取复用 `~/.pi/agent/auth.json` 和模型注册表；默认 `kimi-coding/k3`，用 `TEAM_PROVIDER`、`TEAM_MODEL` 改选。应用配置和数据库不存模型密钥。提取草稿经用户确认才落库；直接保存空事项列表只保存原始记录。
+1. 正式内部小程序和 AppID，在组织页登记 `channel: miniapp`，选择公司、品牌或门店上限。
+2. AppSecret 仅存服务器环境变量；管理页填变量名称 `secret_env`。应用默认停用，未配置凭据不能启用。归属和 AppID 创建后不可更换；未知 AppID 可先留空登记，但获知后要新建接入并绑定员工。
+3. 在微信后台配置 HTTPS request 合法域名。页面调用 `wx.login`，只将临时 code 交给知识服务，服务端向微信官方 `jscode2session` 换取 OpenID；页面提交的员工 ID 不作为登录依据。
+4. 管理员通过可信的官方身份流程获取并核实“该 AppID 下的 OpenID ↔ 已批准员工”。不同小程序的 OpenID 不自动互认。未绑定者被拒绝，登录接口不向陌生请求返回 OpenID。本版没有自助邀请/认领绑定页面，接入时需补充公司的可信绑定流程，不能让员工自由选择他人账号。
+5. 页面提供范围选择、录入/提问模式、来源展开、处理中/失败状态、历史和退出登录，调用共享 SDK。会话默认仅在内存保存，过期重新登录；客户端不得放 AppSecret 或服务器桥接密钥。
 
-默认中文分词 + SQLite FTS5 BM25 + 项目全部事项当前状态证据。可选接入：
+```js
+import {KnowledgeClient, createMiniappTransport} from './knowledge-client.mjs';
 
-- `TEAM_EMBEDDING_URL`：完整 embeddings POST 地址；`TEAM_EMBEDDING_MODEL`；`TEAM_EMBEDDING_KEY`。协议为 `{model,input}` → `{data:[{embedding:[]} ]}`。
-- `TEAM_RERANK_URL`：完整 rerank POST 地址；`TEAM_RERANK_MODEL`；`TEAM_RERANK_KEY`。协议为 `{model,query,documents,top_n}` → `{results:[{index,relevance_score}]}`，按返回顺序使用。
+const kb = new KnowledgeClient({
+  baseUrl: 'https://kb.example.test',
+  transport: createMiniappTransport(wx.request.bind(wx)),
+});
+// code 来自 wx.login，其余变量由未来页面提供。
+await kb.login(applicationId, code);
+const profile = await kb.me();
+const conversation = await kb.createConversation({scope_id: chosenAuthorizedScopeId});
+const response = await kb.sendMessage(conversation.id, {
+  text: '一店冷柜已修复，今晚复查', intent: 'save',
+  idempotency_key: persistedClientMessageId,
+});
+```
 
-向量缓存持久化，按项目、端点、模型和文本散列隔离；查询进行精确余弦扫描、与 BM25 做 RRF 融合。首次查询会依次为本项目记录建立缓存，适合小规模验证；后台预索引、批处理及 ANN 尚未实现。服务配置错误会显式失败，不伪装成成功启用。外部服务会接收到本次用户有权访问的项目文本。
+[SDK](client/knowledge-client.mjs) 无 Node 或微信全局依赖，也能注入其他平台请求。一次发送产生并保存一个消息标识，重试复用，只有新消息才生成新标识。`save/query/auto` 分别是明确录入、提问、自动识别；识别失败或含糊时澄清，不把问题当事实保存。
 
-## 重要边界
+## 统一 API
 
-这是可运行的纵向原型，未作为生产多人系统验收。已支持会话撤销与成员管理；尚无审计导出、附件、自动纠错/重建、长期会话指代、跨项目全局汇总。当前事项完整覆盖只指已确认结构化事项；未经提取的原始文字只能通过检索访问。项目内容很多时缺少分层汇总与模型上下文预算，需要限制试用规模。
+下表均以 `/api/v1/` 开头。普通会话通过 `Authorization: Bearer ...` 传递；浏览器管理使用 HttpOnly、SameSite cookie。应用会话不能使用管理接口或绑定成普通设备会话。所有响应禁缓存，没有跨域通配授权。
 
-运行 `npm run test:team`。测试覆盖权限、晚到事件、重开、事务/幂等、中文检索、补查证据、向量与重排适配；真实模型及真实向量服务结果以验收清单为准。
+| 接口 | 用途 |
+| --- | --- |
+| `GET capabilities` | 公共能力版本，不含业务资料 |
+| `POST channels/:app/login` | 小程序 `{code}` 登录 |
+| `POST channels/:app/bridge` | 可信服务器桥接，独立应用密钥 + 已验签 external_id |
+| `GET me` / `POST logout` | 当前员工、授权范围 / 撤销本会话 |
+| `GET/POST admin/organization` | 公司负责人或平台管理员管理组织 |
+| `GET/POST admin/channels` | 管理接入、人工核实绑定、撤销会话 |
+| `GET/POST conversations` | 本人当前入口的对话列表 / 创建固定范围对话 |
+| `GET/POST conversations/:id/messages` | 读取历史 / 发消息 |
+| `GET conversations/:id/requests/:request` | 查询持久请求状态 |
+| `POST conversations/:id/delete` | 删除对话、请求及消息，保留已入库来源 |
+| `POST search` / `POST state` | 证据检索 / 已确认事项状态 |
+| `GET/POST records` | SQL 游标分页读取 / 幂等保存 |
+| `POST get-records` / `POST extract` | 展开有效来源 / 待确认事项草稿 |
+| `POST correct/withdraw/restore/purge` | 作者纠错、撤回、恢复、彻底删除 |
+| `GET record-history?id=...` | 当前范围的记录及修订历史 |
 
-## 同题模型对比
+单范围用正文 `scope_id` 或 `X-Knowledge-Scope`，GET 还可用查询参数。多范围用 `scope_ids`，最多 40 个、同公司且全部获准后才执行。对话范围和入口不可变，切换范围创建新对话；对话属于个人，同事不能读。目前历史用于展示，本次检索以当前问题为准，尚未实现可靠的“它/刚才那件事”指代解析，提问需写清项目或事项名称。
 
-配置模板为 `.env.retrieval.example`，完整步骤、指标定义和当前结果见 [eval/README.md](eval/README.md)。支持显式 `TEAM_RETRIEVAL_MODE=bm25|vector|hybrid|hybrid-rerank`。只有配置并成功调用真实服务后，才能算真实模型验收。
+消息 `text` 最多 20000 字符，`idempotency_key` 为 1—128 字符，同键不同内容返回 409。升级前旧写入若没有完整回执，也会返回 409 要求先读取确认，不自动重放。响应包含 request_id、status、result、messages；并发重复返回 processing，可轮询或按原标识重试。进程中断后处理租约到期可恢复；核心请求需要调用方重试，微信队列会负责重试。不确定是否写入时先查原请求，不新建标识盲目重发。
 
-## 证据工具与 Agent 分工
+对话/消息分页用 limit、before，返回 next_before；记录按录入时间和 ID 用 after，返回 next_after，已删除游标返回 409。检索 `coverage.exhaustive: false` 表示非穷尽，没搜到不能说全库没有；事项覆盖仅限已确认结构化事项。跨店问答提供逐范围覆盖和引用，不能代替完整经营报表。
 
-search 接受 query、limit（1—40，默认15）、strategy（hybrid 或 exact）和 depth（0—2，默认1）。hybrid 使用配置的检索模式并合并引用候选；exact 只做实体/编号展开。返回原文、作者、时间、范围和覆盖信息，不生成答案。coverage.exhaustive 始终为 false，truncated 只表示合并候选被 limit 截断，corpus_not_returned 表示未返回的库内记录数；这些不代表语义置信度或相关记录总数。
+旧 `/api/*` 和客户端保留，仍执行相同员工及应用范围权限。旧 `/api/ask` 默认 410，新聊天不依赖该兼容开关；旧个人令牌不能登录正式 HTTP。
 
-get-records 接受1—40个 ids，返回当前范围内记录及 unavailable_ids；state 返回已登记事项的最新状态和来源记录。宿主 Agent 根据证据补查、澄清并回答，在当前对话维护上下文。生成模型按需加载，服务启动和证据查询不依赖生成模型；embedding/rerank 仍按配置调用。
+## 模型、质量和费用
 
-默认 /api/ask 返回410，不创建服务端澄清会话。旧客户端 ask/reply 仅为迁移兼容保留，显式设置 TEAM_LEGACY_ASK=1 才开启历史循环。已有澄清数据不删除。历史58次试验只验证旧循环，不能代表新宿主 Agent 的端到端表现。
+模型按需复用 pi 凭据和注册表，默认 `kimi-coding/k3`，可通过 `TEAM_PROVIDER`、`TEAM_MODEL` 选择。启动、直接保存、证据读取不要求生成模型可用，自动意图、提取和问答需要模型。失败会明确提示，不能冒充保存或结论。
 
-本轮31项测试通过，覆盖真实本机HTTP与客户端存取、默认关闭问答、证据范围、状态来源和已有检索/循环回归。独立宿主端到端留出集验收尚未完成。
+可选检索配置见 `.env.retrieval.example` 和 [模型对比说明](eval/README.md)：`TEAM_RETRIEVAL_MODE=bm25|vector|hybrid|hybrid-rerank`，`TEAM_EMBEDDING_URL/MODEL/KEY`，`TEAM_RERANK_URL/MODEL/KEY`。
 
-## 更改与删除
+默认全文模式不产生向量费用。向量缓存按范围、端点、模型、文本哈希隔离；当前仍是范围内精确扫描，缺失向量在查询时建立，不是大型 ANN 索引。外部服务会收到本次获准范围的文本，应选择公司允许的数据处理服务。
 
-客户端增加 `correct --id ID --version N --file FILE [--changes-file JSON] [--occurred-at ISO]`、`withdraw/restore/purge --id ID --version N`、`history --id ID`。对应 POST /api/correct、/api/withdraw、/api/restore、/api/purge 与 GET /api/record-history?id=ID。get/records 返回 version；history 可读取撤回状态。仅原作者可修改或删除，项目有权成员可查历史；默认免令牌模式所有请求共用验证作者，不适合多人权限验证。
+新聊天最多 80 条证据、总正文 80000 字符、单条 8000 字符；提取最多关联 100 个事项。单次模型等待 60 秒，进程最多 16 个、每员工最多 2 个上游请求。超时结果丢弃，未终止的上游仍占位直到结束。没有跨进程配额或月度费用硬上限。
 
-纠错保留原记录ID和录入时间，默认保持发生时间，保存旧原文及旧事件快照。correct 是完整替代：原记录含事项时必须显式提供完整 changes，空数组撤销该记录全部事项，保留事项关联需沿用 item_id。正常业务进展继续 save 追加；版本变化返回409，失败或响应丢失后先读 history，不盲目重试。
+上线前用真实问题检查：本店查询、跨店汇总、敏感资料、无记录、矛盾状态、晚录入、离职、调店、外部身份重绑及重试。核对丢失/重复、来源正确率、权限拒绝、问题错存、延迟和成本。自动测试与假模型不能替代真实模型验收。
 
-撤回记录从默认 records/get、全文、向量、精确展开和状态历史中排除，restore 后恢复当前版本。当前事项由剩余有效事件重新计算，零来源事项不出现在 state；旧来源回退不代表现实已恢复。历史接口显式可读旧版本。
+## 更正、删除、保留和备份
 
-purge 清除该记录正文、事件、修订版本、全文索引及无剩余事件事项，清空共享向量缓存和本项目旧澄清会话。幂等键仅保留哈希墓碑，防止重试复活已删除记录。历史ID会失效；不清理其他独立记录中人工重复抄录的相同文本。没有摘要层，因此目前无自动摘要重建。
+正常进展追加新记录，录错才纠错。更正保留 ID、原录入时间和修订快照；原含事项时必须显式提供完整 changes。撤回可恢复，范围内获准成员仍能查修订历史；彻底删除清除正文、修订、事件、全文和无来源事项，清理派生缓存，用哈希墓碑阻止同键重放复活。
 
-彻底删除指活动应用数据库中的逻辑内容清除；开启 SQLite secure_delete，但不承诺清除外部备份、文件系统历史、既有WAL副本、外部模型服务已接收的数据或宿主对话。敏感资料的介质级清除需要独立流程。向量缓存缺少记录映射，现阶段保守清空整表，下次检索重建，存在额外请求成本。记录修改期间在途检索返回409，避免使用旧证据或重新写入旧缓存。
+保存消息引用原记录，不另复制正文；更正后显示新版本，撤回/删除后不再显示正文。回答在资料或权限版本变化后失效，生命周期操作同步清理活动库内旧派生答案。提问文本保留到个人删除对话；失败/待处理请求可能暂存输入供恢复。收件箱完成/终止时清正文和答复，保留去重元数据。未实现按期限自动清理和批量个人数据导出。
+
+数据库默认 `team-app/.data/team.sqlite`；已有唯一 SQLite 文件沿用，多文件要求 `TEAM_DB`，相对路径以 team-app 为基准。默认项目固定，多旧项目先设 `TEAM_DEFAULT_PROJECT_ID`。升级使用增量建表，不自动合并旧作者。上线前停服务，备份内核库、collector 收件箱及环境配置，并演练恢复；不要在线只拷主 SQLite 文件而遗漏 WAL。
+
+旧平面 Wiki/静态摘要默认停用，即使开启 `KB_ENABLE_LEGACY_EXPORT=1` 也拒绝公司权限范围。旧导出文件需单独管理，不能发布；计数游标、增量覆盖和删除依赖尚未重构，不能当受控公司事实来源。
+
+彻底删除只清除活动服务内容，不能追回已经发到微信的消息、下载副本、外部模型缓存、备份或文件系统历史。权限撤销同样不能追回已发送内容。备份要限制访问并设公司认可的保留期限。
+
+## 后续顺序
+
+1. **真实试点**：先两家门店，再逐步扩到 12 家。核对身份、权限、模型质量和恢复流程，不将旧库未经审核全部导入。
+2. **内部小程序**：完善可信员工绑定和聊天页面，复用 SDK，各品牌登记入口，不复制知识内核。
+3. **知识整理能力**：附件对象存储、病毒检查、OCR、语音转写、文件版本、项目实体 ID、冲突核实、审批发布、带权限和来源依赖的分层摘要。原始记录、整理稿、正式制度需区分；这些流程未在本版实现。
+4. **经营分析**：接入收银、库存、排班、财务系统并统一口径。聊天记录不适合精确计算营业额，统计应走受权限控制的结构化查询。
+5. **规模化**：索引变慢、写入竞争或多公司需独立部署时，再迁移 PostgreSQL + 行级隔离、后台索引、对象存储、分公司配额、审计导出和监控。按实测容量决定服务器规格。
+
+运行 `npm test` 或 `npm run quality-and-tests`，覆盖内核、SDK、真实本机 HTTP、队列和导出权限；CI 使用 Linux/Windows。生产部署、真实微信登录和模型服务仍需目标环境验收。仓库 main 有自动部署时，合并可能触发上线，须先完成配置和备份。
