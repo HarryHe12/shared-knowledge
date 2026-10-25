@@ -14,8 +14,9 @@
     "dev": "npm run start -w @llm-wiki/team-app",
     "dev:server": "npm run dev",
     "dev:team": "npm run dev",
-    "test": "npm run test:team",
+    "test": "npm run test:team && npm run test:collector",
     "test:team": "npm run test -w @llm-wiki/team-app",
-    "quality-and-tests": "npm run test:team"
+    "quality-and-tests": "npm test",
+    "test:collector": "node --test kb-system/collector/test/*.test.mjs kb-system/librarian/test/*.test.mjs"
   }
 }

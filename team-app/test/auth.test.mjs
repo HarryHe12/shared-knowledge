@@ -49,3 +49,14 @@ test('HTTP registration, browser cookie, approval, scope isolation and reader en
 });
 
 test('browser script compiles and password forms never fall back to GET',()=>{new Script(authPage.match(/<script>([\s\S]*)<\/script>/)[1]);assert.match(authPage,/<form id="login" method="post"/);assert.match(authPage,/<form id="register" method="post"/);});
+
+test('hard session expiry and live admin state override cached identity objects',async()=>{
+ const store=new Store(':memory:');try{
+  const auth=new Auth(store,store.defaultProject());await auth.register({...registration,email:'expiry-admin@example.test'},true);
+  const token=(await auth.login({email:'expiry-admin@example.test',password:registration.password})).token,cached=auth.user(token);
+  auth.db.prepare('UPDATE auth_sessions SET expires=?,hard_expires=? WHERE hash=?').run(Date.now()+86400000,Date.now()-1,cached.session_hash);
+  assert.equal(auth.user(token),undefined);
+  auth.db.prepare("UPDATE accounts SET status='disabled' WHERE user_id=?").run(cached.id);
+  assert.throws(()=>auth.manage(cached,{action:'scope',name:'缓存身份越权'}),{status:403});
+ }finally{store.close();}
+});
