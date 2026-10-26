@@ -145,6 +145,26 @@ const response = await kb.sendMessage(conversation.id, {
 
 ## 统一 API
 
+### 受信内部小程序身份接入
+
+已有业务后端可申请独立 `agent` 入口，限定公司和品牌，并使用独立桥接凭据。服务器部署前须备份并显式执行 `upgradeFederation(db)`（`src/federation.mjs`）；服务启动不会执行该迁移。未迁移、入口未启用或缺配置时 `/api/v1/channels/:app/federate` 拒绝服务，旧登录入口保持原行为。
+
+命令行迁移仅接受已存在的绝对数据库路径：`node team-app/scripts/upgrade-federation.mjs --db /absolute/private/path/team.sqlite`。该命令没有默认库路径，检查升级前后完整性与外键；先对在线一致备份的隔离副本演练，再停服务备份并升级正式库，不能在线裸拷主SQLite而遗漏WAL。
+
+仅服务器设置 `TEAM_FEDERATION_CONFIG_JSON` 或 `TEAM_FEDERATION_CONFIG_FILE`（两者不能同时提供），配置形状如下，示例均为合成标识：
+
+```json
+{"apps":{"synthetic-app":{"company_id":"synthetic-company","tenant_id":"synthetic-tenant","brand_id":"synthetic-brand","operator_user_id":"verified-company-owner","stores":{"hs":"synthetic-store-staff-scope"}}}}
+```
+
+每个范围必须是对应有效公司、品牌、具体门店的 `staff` 员工范围；公司公共、管理、负责人范围不能映射为门店。`operator_user_id` 必须是已批准的有效公司负责人，仅作为部署配置授权与审计主体，不作为员工身份或数据作者。应用自己的 `secret_env` 引用独立服务端密钥，不能复用企业微信密钥或将密钥放进客户端。
+
+可信后端验证现有员工会话后，向 `POST /api/v1/channels/:app/federate` 发送 Bearer 应用密钥及 `{subject, company_id, role, store_keys, issued_at, request_id, name?}`。`subject` 为服务端生成的稳定员工标识；`role` 仅允许 owner/staff/clerk，staff/clerk只能一个具体门店；`issued_at` 为Unix秒整数，误差最多60秒；`request_id` 为每次尝试独立生成的8—128字符编号（字母、数字、下划线、连字符），重复声明返回409。请求失败后应使用新声明重新验证业务会话，业务消息自身的幂等编号保持不变。
+
+知识服务为每个 app+subject 创建独立外部知识身份，既有负责人不合并，员工不需要重复注册。此身份不是知识库管理员或公司负责人，不开放密码、设备和普通会话。返回短期 channel token（60秒）；每次重新声明替换当前范围、撤销旧token。业务后端须在每次知识请求前后重验本地员工会话和门店权限，token仅存在服务器内存，不能交给客户端直接访问知识库。业务侧停用/撤权通过当前声明和短期会话收敛，知识服务的手动账号/成员/绑定/联邦身份停用独立生效，重新声明不能复活。
+
+联邦范围是独立上限，即使之后误加 scope grant 或负责人角色，也不能扩大到公司公共、管理范围或旧项目；配置撤销范围立即影响后续知识访问。此机制只接受可信业务服务器，不校验客户端自报角色，不应开放给普通浏览器或未知调用方。正式接入应验证调店、停用、跨店/跨公司拒绝、来源作者和原库保真，自动测试不能替代真实账号验收。
+
 下表均以 `/api/v1/` 开头。普通会话通过 `Authorization: Bearer ...` 传递；浏览器管理使用 HttpOnly、SameSite cookie。应用会话不能使用管理接口或绑定成普通设备会话。所有响应禁缓存，没有跨域通配授权。
 
 | 接口 | 用途 |
