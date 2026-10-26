@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {federationRole} from './federation.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
 const levels = new Set(['staff', 'management', 'executive']);
@@ -129,6 +130,8 @@ export class Organization {
   /** Returns a role, rather than allowing platform administration to imply data access. */
   role(user, scope) {
     if (this.account(user)?.status !== 'approved' || !this.scopeActive(scope)) return null;
+    const ceiling = federationRole(this.store, user, scope);
+    if (ceiling !== undefined) return ceiling;
     const member = this.membership(user.id, scope.tenant_id);
     if (!member || scope.audience !== 'staff') return null;
     if (member.role === 'owner') return 'writer';

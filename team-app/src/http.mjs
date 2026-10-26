@@ -44,9 +44,10 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
    if(url.pathname==='/api/v1/logout')res.setHeader('Set-Cookie','kb_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
    if(url.pathname.startsWith('/api/v1/channels/')&&req.method==='POST'){
     if(attempts.size>10000)for(const [k,v] of attempts)if(v.until<Date.now())attempts.delete(k);
-    const key=req.socket.remoteAddress+':channel-'+(url.pathname.endsWith('/bridge')?'bridge':'login'),now=Date.now();
+    const bridge=url.pathname.endsWith('/bridge')||url.pathname.endsWith('/federate');
+    const key=req.socket.remoteAddress+':channel-'+(bridge?'bridge':'login'),now=Date.now();
     const rate=attempts.get(key)??{count:0,until:now+60000};if(rate.until<now){rate.count=0;rate.until=now+60000;}rate.count++;attempts.set(key,rate);
-    if(rate.count>(url.pathname.endsWith('/bridge')?300:20))return send(429,{error:'请求过于频繁，请稍后重试'});
+    if(rate.count>(bridge?300:20))return send(429,{error:'请求过于频繁，请稍后重试'});
    }
    if(url.pathname.startsWith('/api/v1/onboarding/')&&['POST','DELETE'].includes(req.method)&&sessionUser){
     const key='onboarding:'+sessionUser.id,now=Date.now();
