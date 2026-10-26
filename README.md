@@ -33,4 +33,5 @@
 运行 `npm test` 或 `npm run quality-and-tests`，覆盖内核、SDK、HTTP、采集队列和旧导出隔离。
 
 架构、12 家门店落地步骤、API、未来小程序接入和仍待完成的能力见 [服务说明](team-app/README.md)；企业微信配置见 [采集服务说明](kb-system/README.md)。
+继续开发或交给其他 Agent 时，先读 [Kimi 接手说明](KIMI_HANDOFF.md)，其中区分已实现功能、试点部署状态和仍待真实验收的部分。
 维护 team-app 后端、客户端、Skill，以及账号/管理页面；已有外部知识文件与本地数据库保留。
