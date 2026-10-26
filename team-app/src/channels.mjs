@@ -1,5 +1,6 @@
 import {createHash, randomBytes, randomUUID, timingSafeEqual} from 'node:crypto';
 import {Organization} from './organization.mjs';
+import {Federation, federationIdentity} from './federation.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -19,7 +20,7 @@ function flag(value, fallback) {
 
 /** External applications restrict an employee's current grants; they never grant employment. */
 export class Channels {
-  constructor(store, auth, {fetchImpl = fetch, organization} = {}) {
+  constructor(store, auth, {fetchImpl = fetch, organization, env = process.env, now = Date.now} = {}) {
     this.store = store;
     this.db = store.db;
     this.auth = auth;
@@ -52,6 +53,7 @@ export class Channels {
       );
       CREATE INDEX IF NOT EXISTS channel_sessions_binding ON channel_sessions(app_id,external_id);
     `);
+    this.federation = new Federation(this, {env, now});
   }
 
   app(id) {
@@ -208,6 +210,7 @@ export class Channels {
       .get(app.id, text(externalId, '外部员工标识', 256));
     const user = binding && this.currentUser(binding.user_id);
     if (!user || !this.organization.membership(user.id, app.tenant_id)) throw fail('此身份尚未绑定本公司获准使用的员工', 403);
+    this.federation.assertIdentity(app,user);
     return {app, user, binding};
   }
 
@@ -216,9 +219,10 @@ export class Channels {
     const {app,user,binding} = this.resolve(appId,externalId);
     const token = 'kbch_' + randomBytes(32).toString('base64url');
     this.db.prepare('DELETE FROM channel_sessions WHERE expires<=?').run(Date.now());
+    const expiresIn = federationIdentity(this.db, user.id) ? 60 : lifetime;
     this.db.prepare('INSERT INTO channel_sessions VALUES(?,?,?,?,?,?)')
-      .run(digest(token),app.id,externalId,user.id,Date.now()+lifetime*1000,new Date().toISOString());
-    return {token,expires_in:lifetime,identity_verified_at:binding.verified_at,user:{id:user.id,name:user.name},app:this.publicApp(app)};
+      .run(digest(token),app.id,externalId,user.id,Date.now()+expiresIn*1000,new Date().toISOString());
+    return {token,expires_in:expiresIn,identity_verified_at:binding.verified_at,user:{id:user.id,name:user.name},app:this.publicApp(app)};
   }
 
   authenticate(token) {
@@ -248,6 +252,8 @@ export class Channels {
       !timingSafeEqual(Buffer.from(digest(expected)),Buffer.from(digest(bearer)))) throw fail('接入桥接凭据无效',401);
     return this.issue(app.id,text(externalId,'外部员工标识',256));
   }
+
+  federate(appId, bearer, input) { return this.federation.federate(appId, bearer, input); }
 
   async login(code, appId) {
     const app = this.activeApp(appId);

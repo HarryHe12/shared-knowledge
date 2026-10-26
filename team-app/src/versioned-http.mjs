@@ -18,9 +18,9 @@ export async function versionedHttp({req, url, input, send, store, model, auth, 
     send(200, {api_version: 1, audience: 'staff', features: ['organizations', 'onboarding', 'channels', 'conversations', 'records', 'state', 'citations'], transport: 'https-json'});
     return true;
   }
-  const login = /^channels\/([^/]+)\/(login|bridge)$/.exec(path);
+  const login = /^channels\/([^/]+)\/(login|bridge|federate)$/.exec(path);
   if (login && method === 'POST') {
-    const result = login[2] === 'login'
+    const result = login[2] === 'federate' ? channels.federate(login[1], bearer, input) : login[2] === 'login'
       ? await channels.login(input.code, login[1])
       : await channels.bridge(login[1], bearer, input.external_id);
     send(200, result);
