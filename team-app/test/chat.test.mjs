@@ -329,8 +329,10 @@ test('多范围对话只允许同公司，全部授权后检索，返回逐范�
   assert.equal(result.result.coverage.registered_items_only, true);
   const before = f.store.records(f.user, f.project.id).length + f.store.records(f.user, second.id).length;
   const save = await f.chat.send(f.user, conversation.id, message('盘点全部完成', 'save', 'multi-save'));
-  assert.equal(save.result.kind, 'needs_clarification');
-  assert.equal(f.store.records(f.user, f.project.id).length + f.store.records(f.user, second.id).length, before);
+  assert.equal(save.result.kind, 'saved');
+  assert.equal(save.result.record.scope_id, conversation.scope_id);
+  assert.match(save.result.answer, /已记入/);
+  assert.equal(f.store.records(f.user, f.project.id).length + f.store.records(f.user, second.id).length, before + 1);
   f.allowed.delete(second.id);
   await assert.rejects(f.chat.send(f.user, conversation.id, message('盘点', 'query', 'all-scope-guard')), {status: 403});
   assert.equal(calls, 1);
@@ -363,4 +365,97 @@ test('消息参数和确认事项在写入前验证', async t => {
   assert.equal(f.store.records(f.user, f.project.id).length, 0);
   assert.throws(() => f.chat.messages(f.user, conversation.id, {limit: 101}), {status: 400});
   assert.throws(() => f.chat.create(f.user, {scope_id: f.project.id, scope_ids: [f.project.id]}), {status: 400});
+});
+
+async function orgFixture(t, model) {
+  const f = fixture(t, model);
+  const {Organization} = await import('../src/organization.mjs');
+  f.store.organization = new Organization(f.store);
+  const db = f.store.db;
+  db.exec(`CREATE TABLE IF NOT EXISTS accounts(user_id TEXT PRIMARY KEY REFERENCES users(id),email TEXT UNIQUE NOT NULL,
+    department TEXT NOT NULL,reason TEXT NOT NULL,password TEXT NOT NULL,status TEXT NOT NULL,
+    admin INTEGER NOT NULL DEFAULT 0,review_note TEXT NOT NULL DEFAULT '')`);
+  db.prepare("INSERT INTO accounts VALUES(?,?,?,?,?,?,0,'')").run(f.user.id, 'owner@test', '餐创食然', '负责人', 'pw', 'approved');
+  const T = 'tenant-1', B = 'brand-1';
+  db.prepare('INSERT INTO org_tenants VALUES(?,?,1)').run(T, '餐创食然');
+  db.prepare('INSERT INTO org_brands VALUES(?,?,?,1)').run(B, T, '胡叨叨');
+  db.prepare('INSERT INTO org_stores VALUES(?,?,?,?,1)').run('store-1', T, B, '和生汇');
+  db.prepare('INSERT INTO org_stores VALUES(?,?,?,?,1)').run('store-2', T, B, '清河万象汇');
+  db.prepare('INSERT INTO org_memberships VALUES(?,?,?,1)').run(T, f.user.id, 'owner');
+  db.exec('CREATE TABLE IF NOT EXISTS access_scopes(id TEXT PRIMARY KEY, name TEXT NOT NULL)');
+  db.exec('CREATE TABLE IF NOT EXISTS scope_grants(user_id TEXT NOT NULL, scope_id TEXT NOT NULL, role TEXT NOT NULL)');
+  const scope = (id, name, level, store, brand = B) => {
+    db.prepare('INSERT INTO projects VALUES(?,?)').run(id, name);
+    db.prepare('INSERT INTO access_scopes VALUES(?,?)').run(id, name);
+    db.prepare("INSERT INTO org_scopes VALUES(?,?,?,?,?,'staff',1)").run(id, T, brand, store, level);
+    f.allowed.add(id); f.writable.add(id);
+  };
+  scope('sc-exec', '餐创食然 · 公司负责人', 'executive', null, null);
+  scope('sc-pub', '餐创食然 · 公司公共', 'staff', null, null);
+  scope('sc-bpub', '胡叨叨 · 品牌公共', 'staff', null);
+  scope('sc-bmgmt', '胡叨叨 · 品牌管理', 'management', null);
+  scope('sc-s1staff', '胡叨叨 · 和生汇 · 员工协作', 'staff', 'store-1');
+  scope('sc-s1mgmt', '胡叨叨 · 和生汇 · 店长管理', 'management', 'store-1');
+  scope('sc-s2staff', '胡叨叨 · 清河万象汇 · 员工协作', 'staff', 'store-2');
+  scope('sc-s2mgmt', '胡叨叨 · 清河万象汇 · 店长管理', 'management', 'store-2');
+  f.scopes = {exec: 'sc-exec', pub: 'sc-pub', bpub: 'sc-bpub', bmgmt: 'sc-bmgmt',
+    s1staff: 'sc-s1staff', s1mgmt: 'sc-s1mgmt', s2staff: 'sc-s2staff', s2mgmt: 'sc-s2mgmt'};
+  return f;
+}
+
+test('多范围保存自动推导落点：内容关键词、管理用词提升、品牌优先、稳定兜底', async t => {
+  const f = await orgFixture(t, async () => { throw Error('保存推导不调用模型'); });
+  const conversation = f.chat.create(f.user, {scope_ids: Object.values(f.scopes)});
+  const landed = async (text, key, scopeId) => {
+    const result = await f.chat.send(f.user, conversation.id, message(text, 'save', key));
+    assert.equal(result.result.kind, 'saved', text);
+    assert.equal(result.result.record.scope_id, scopeId, text);
+    return result.result.record;
+  };
+  await landed('和生汇今天客流不错', 'k1', f.scopes.s1staff);
+  await landed('和生汇做了库存盘点和排班调整', 'k2', f.scopes.s1mgmt);
+  await landed('清河万象汇冷柜故障已报修', 'k3', f.scopes.s2staff);
+  await landed('胡叨叨新菜单确定了', 'k4', f.scopes.bpub);
+  await landed('今天工作一切正常', 'k5', f.scopes.pub);
+  for (const scope of Object.values(f.scopes))
+    assert.ok(!f.store.records(f.user, scope).some(row => row.project_id === f.scopes.exec), '负责人级不自动写入');
+  assert.match((await f.chat.send(f.user, conversation.id, message('和生汇客人表扬服务', 'save', 'k6'))).result.answer, /换/);
+});
+
+test('回复“换到XX”把最近一条记录改存到其他范围，原记录撤回有修订历史', async t => {
+  const f = await orgFixture(t, async () => 'not json');
+  const conversation = f.chat.create(f.user, {scope_ids: Object.values(f.scopes)});
+  const first = await f.chat.send(f.user, conversation.id, message('今天工作一切正常', 'save', 'r1'));
+  assert.equal(first.result.record.scope_id, f.scopes.pub);
+  const moved = await f.chat.send(f.user, conversation.id, message('换到和生汇', 'auto', 'r2'));
+  assert.equal(moved.result.kind, 'saved');
+  assert.match(moved.result.answer, /改存到【胡叨叨 · 和生汇 · 员工协作】/);
+  assert.equal(moved.result.record.scope_id, f.scopes.s1staff);
+  assert.equal(f.store.records(f.user, f.scopes.s1staff)[0]?.text, '今天工作一切正常');
+  assert.equal(f.store.records(f.user, f.scopes.pub).length, 0);
+  assert.equal(f.store.records(f.user, f.scopes.s1staff).length, 1);
+  const history = f.store.history(f.user, f.scopes.pub, first.result.record.id);
+  assert.ok(history.revisions.some(row => row.action === 'withdraw'));
+  const bare = await f.chat.send(f.user, conversation.id, message('换', 'auto', 'r3'));
+  assert.equal(bare.result.kind, 'needs_clarification');
+  assert.ok(bare.result.clarification.scope_ids.length >= 1);
+  const goods = await f.chat.send(f.user, conversation.id, message('换货流程怎么操作', 'auto', 'r4'));
+  assert.equal(goods.result.kind, 'needs_clarification');
+  assert.match(goods.result.answer, /保存为工作记录，还是查询/);
+});
+
+test('普通店员只有一个可写范围时保存零打扰，不回执范围选择提示', async t => {
+  const f = await orgFixture(t, async () => 'not json');
+  const db = f.store.db;
+  const clerk = f.store.user('店员丙', 'clerk-one');
+  db.prepare("INSERT INTO accounts VALUES(?,?,?,?,?,?,0,'')").run(clerk.id, 'clerk@test', '胡叨叨', '店员', 'pw', 'approved');
+  db.prepare('INSERT INTO org_memberships VALUES(?,?,?,1)').run('tenant-1', clerk.id, 'member');
+  db.prepare('INSERT INTO org_assignments VALUES(?,?,?,?,?,?)').run('a-1', 'tenant-1', clerk.id, 'brand-1', 'store-1', 'staff');
+  for (const scope of Object.values(f.scopes)) if (scope !== 'sc-s1staff') f.writable.delete(scope);
+  const conversation = f.chat.create(clerk, {scope_ids: [f.scopes.s1staff, f.scopes.bpub, f.scopes.pub]});
+  const result = await f.chat.send(clerk, conversation.id, message('今天一切正常', 'save', 'c1'));
+  assert.equal(result.result.kind, 'saved');
+  assert.equal(result.result.record.scope_id, f.scopes.s1staff);
+  assert.match(result.result.answer, /已记入【胡叨叨 · 和生汇 · 员工协作】/);
+  assert.ok(!/换/.test(result.result.answer));
 });
