@@ -2,6 +2,7 @@ import {randomUUID, createHash} from 'node:crypto';
 import {answer} from './intelligence.mjs';
 import {searchRecords, getState} from './evidence.mjs';
 import {unboundedAbsence, missingUserConstraint} from './query-policy.mjs';
+import {suggestScope, matchScope} from './scope-suggest.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -264,6 +265,67 @@ export class ChatService {
     } finally { this.running.delete(request.id); }
   }
 
+  hasTable(name) {
+    return Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+  }
+  /** 员工在此入口下当前可写的范围（含门店/品牌/公司名等推导元数据）。 */
+  writableCandidates(user, conversation, context) {
+    const rows = [];
+    const hasOrg = this.hasTable('org_scopes');
+    for (const id of conversation.scope_ids) {
+      try { this.authorize(user, id, context, true); } catch { continue; }
+      let row = null;
+      if (hasOrg) row = this.db.prepare(`SELECT s.scope_id AS id,p.name,s.level,s.store_id,s.brand_id,s.tenant_id,
+          st.name AS store_name,b.name AS brand_name,t.name AS tenant_name
+        FROM org_scopes s JOIN projects p ON p.id=s.scope_id
+        LEFT JOIN org_stores st ON st.id=s.store_id AND st.tenant_id=s.tenant_id
+        LEFT JOIN org_brands b ON b.id=s.brand_id AND b.tenant_id=s.tenant_id
+        LEFT JOIN org_tenants t ON t.id=s.tenant_id
+        WHERE s.scope_id=? AND s.active=1`).get(id);
+      if (!row) row = {id, name: this.db.prepare('SELECT name FROM projects WHERE id=?').get(id)?.name ?? id,
+        level: null, store_id: null, brand_id: null, tenant_id: null, store_name: null, brand_name: null, tenant_name: null};
+      rows.push(row);
+    }
+    return rows;
+  }
+  assignmentsOf(user, candidates) {
+    if (!this.hasTable('org_assignments')) return [];
+    const tenant = candidates.find(scope => scope.tenant_id)?.tenant_id;
+    return tenant
+      ? this.db.prepare('SELECT * FROM org_assignments WHERE user_id=? AND tenant_id=?').all(user.id, tenant)
+      : this.db.prepare('SELECT * FROM org_assignments WHERE user_id=?').all(user.id);
+  }
+
+  /** “换/换到 XX”：本对话最近一条已保存记录改存到其他可写范围（原记录撤回，可恢复）。 */
+  relocate(user, conversation, requestId, target, context) {
+    this.guard(user, conversation, context);
+    const candidates = this.writableCandidates(user, conversation, context).filter(scope => scope.level !== 'executive');
+    if (!candidates.length) throw fail('当前入口没有可写入的知识范围', 403);
+    const last = this.db.prepare(`SELECT m.record_id, r.project_id AS scope_id, r.text, r.occurred_at
+      FROM chat_messages m JOIN records r ON r.id=m.record_id
+      WHERE m.conversation_id=? AND m.record_id IS NOT NULL ORDER BY m.seq DESC LIMIT 1`).get(conversation.id);
+    if (!last) return {kind: 'needs_clarification', answer: '这个对话里还没有已保存的记录可以改存，请先发送要保存的内容。',
+      clarification: {question: '请先发要保存的内容'}, citations: []};
+    const goal = target.trim() ? matchScope(target, candidates) : null;
+    if (!goal || goal.id === last.scope_id) {
+      const options = candidates.filter(scope => scope.id !== last.scope_id);
+      return {kind: 'needs_clarification',
+        answer: goal ? '这条记录已经在【' + goal.name + '】。' : '请告诉我要改存到哪个范围（可以只发店名或品牌名）。',
+        clarification: {question: '请选择改存目标范围', scope_ids: options.map(scope => scope.id)}, citations: []};
+    }
+    this.authorize(user, goal.id, context, true);
+    this.db.prepare('UPDATE chat_requests SET payload=NULL WHERE id=?').run(requestId);
+    const record = this.store.add(user, goal.id, {text: last.text, occurred_at: last.occurred_at,
+      idempotency: 'chat:' + requestId + ':relocate'});
+    this.db.prepare('UPDATE chat_requests SET source_record_id=?,payload=NULL WHERE id=?').run(record.id, requestId);
+    const oldVersion = this.db.prepare('SELECT COALESCE(version,1) AS v FROM record_lifecycle WHERE record_id=?').get(last.record_id)?.v ?? 1;
+    this.store.withdraw(user, last.scope_id, {id: last.record_id, version: oldVersion});
+    const oldName = this.db.prepare('SELECT name FROM projects WHERE id=?').get(last.scope_id)?.name ?? last.scope_id;
+    const source = this.source(record);
+    return {kind: 'saved', answer: '已从【' + oldName + '】改存到【' + goal.name + '】（#' + record.id.slice(0, 8) + '）',
+      record: source, citations: [source]};
+  }
+
   view(user, conversation, context) {
     const view = Object.create(this.store);
     view.access = (actor, scope) => {
@@ -342,6 +404,11 @@ export class ChatService {
 
   async process(user, conversation, requestId, payload, context, heartbeat) {
     const epoch = this.epoch(), model = this.guardedModel(user, conversation, context, epoch, heartbeat);
+    if (payload.intent === 'auto') {
+      // “换/换到 XX/改存”：把本对话最近一条已保存的记录改存到其他可写范围。
+      const relocate = /^\s*(?:换(?!货)|改存)(?:到|至|成)?\s*[:：]?\s*(.*?)\s*$/.exec(payload.text);
+      if (relocate) return this.relocate(user, conversation, requestId, relocate[1], context);
+    }
     let intent = payload.intent;
     if (intent === 'auto') {
       try {
@@ -353,17 +420,27 @@ export class ChatService {
         clarification: {question: '请选择本次操作', options: ['保存记录', '查询信息']}, citations: []};
     }
     if (intent === 'save') {
-      if (conversation.scope_ids.length !== 1) return {kind: 'needs_clarification', answer: '这条记录应保存到哪个知识范围？请选择一个范围后新建对话保存。',
-        clarification: {question: '请选择一个保存范围', scope_ids: conversation.scope_ids}, citations: []};
-      this.guard(user, conversation, context, true);
+      // 多范围时不再要求员工先选范围：按内容关键词、岗位归属推导一个可写范围直接保存，
+      // 负责人级范围绝不自动选中；回执告知落点，回复“换”可改存。权限模型不变。
+      let target = {id: conversation.scope_id, name: this.db.prepare('SELECT name FROM projects WHERE id=?').get(conversation.scope_id)?.name ?? conversation.scope_id};
+      let relocateHint = '';
+      if (conversation.scope_ids.length !== 1) {
+        const candidates = this.writableCandidates(user, conversation, context).filter(scope => scope.level !== 'executive');
+        if (!candidates.length) throw fail('当前入口没有可写入的知识范围', 403);
+        target = suggestScope(payload.text, candidates, {assignments: this.assignmentsOf(user, candidates)}).scope;
+        this.authorize(user, target.id, context, true);
+        if (candidates.length > 1) relocateHint = '。如需改存其他范围，请回复“换”';
+      }
+      // 单范围保持原来的整体写校验；多范围只要求对话范围可读、目标范围可写（对话里常有只读范围）。
+      this.guard(user, conversation, context, conversation.scope_ids.length === 1);
       // A save retries from the caller's identical payload and stable write key. Clear
       // its temporary copy before committing, including the crash-after-write case.
       this.db.prepare('UPDATE chat_requests SET payload=NULL WHERE id=?').run(requestId);
-      const record = this.store.add(user, conversation.scope_id, {text: payload.text, changes: payload.changes,
+      const record = this.store.add(user, target.id, {text: payload.text, changes: payload.changes,
         idempotency: 'chat:' + requestId, ...(payload.occurred_at ? {occurred_at: payload.occurred_at} : {})});
       this.db.prepare('UPDATE chat_requests SET source_record_id=?,payload=NULL WHERE id=?').run(record.id, requestId);
       const source = this.source(record);
-      return {kind: 'saved', answer: '已保存工作记录 #' + record.id.slice(0, 8), record: source, citations: [source]};
+      return {kind: 'saved', answer: '已保存工作记录 #' + record.id.slice(0, 8) + '，已记入【' + target.name + '】' + relocateHint, record: source, citations: [source]};
     }
     if (payload.text.length > 2000) throw fail('问题最多2000字符');
     const view = this.view(user, conversation, context);
