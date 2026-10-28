@@ -87,12 +87,15 @@ test('真实 HTTP 与 SDK 完成保存、幂等重试、分页、引用问答、
   assert.equal(f.store.records(f.staff.user,f.first.id).length,1);
 });
 
-test('授权汇总只能在同公司，保存必须指定唯一范围；读者不能从存储层写入',async t=>{
+test('授权汇总只能在同公司，保存自动推导落点；读者不能从存储层写入',async t=>{
   const f=await fixture(t),r=f.request;
   assert.equal((await r('/api/v1/conversations',{scope_ids:[f.first.id,f.foreign.id]})).status,400);
   const c=await r('/api/v1/conversations',{scope_ids:[f.first.id,f.second.id]});assert.equal(c.status,200);
   const save=await r('/api/v1/conversations/'+c.data.id+'/messages',{text:'各店完成',intent:'save',idempotency_key:'ambiguous'});
-  assert.equal(save.data.result.kind,'needs_clarification');assert.equal(f.store.records(f.owner.user,f.first.id).length,0);
+  assert.equal(save.data.result.kind,'saved');
+  assert.match(save.data.result.answer,/已记入/);
+  assert.equal(f.store.records(f.owner.user,f.first.id).length+f.store.records(f.owner.user,f.second.id).length,1);
+  assert.equal([f.first.id,f.second.id].includes(save.data.result.record.scope_id),true);
   f.auth.manage(f.owner.user,{action:'grant',id:f.staff.id,scope:f.first.id,role:'reader'});
   assert.throws(()=>f.store.add(f.staff.user,f.first.id,{text:'不允许的写入'}),{status:403});
   assert.equal((await r('/api/v1/records',{text:'不允许的写入',scope_id:f.first.id,idempotency_key:'reader'},f.staff.token)).status,403);
