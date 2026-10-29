@@ -8,7 +8,7 @@ import {DurableInbox} from './inbox.mjs';
 import {handleAgentApi} from './agent-api.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
-const HELP = '可以直接对话，或用“记录：工作进展”“问：项目进展”明确操作。发送“范围”查看可访问范围，发送“/范围 范围编号或完整名称”选择范围，“/范围 全部”恢复公司内汇总查询。多个可写范围时，请先选范围再重发要保存的原文。语音需要开启企微语音转文字；图片和附件请先整理成文字。';
+const HELP = '我是咱们团队的知识库小助手 🙌 直接把工作进展发给我，我会自动存进对应的项目；有问题也直接问，我查完回复你。存错范围的话，回我「换到 XX」就能改。发送「范围」可以看我管着哪些项目；想固定在某个项目里聊，发「/范围 项目名」。暂时只支持文字（语音请先转文字，图片麻烦先打成文字描述）。';
 
 /** WeCom text messages allow 2048 UTF-8 bytes. Split by code point, with room for framing. */
 export function splitReply(value, maxBytes = 1800) {
@@ -24,8 +24,8 @@ export function splitReply(value, maxBytes = 1800) {
 }
 
 function listScopes(scopes) {
-  return '可访问的知识范围：\n' + scopes.map(s => `${s.name}（${s.role === 'writer' ? '可录入' : '只读'}）\n/范围 ${s.id}`).join('\n')
-    + '\n请选择完整名称或编号；选定前，多个可写范围的记录不会自动保存。';
+  return '我现在管着这些范围：\n' + scopes.map((s, i) => `${i + 1}.【${s.name}】${s.role === 'writer' ? '可录入' : '只读'}`).join('\n')
+    + '\n想固定在某个范围里聊，发「/范围 完整名称」；平时不用选，我会自动帮你判断存到哪。';
 }
 
 function messageIntent(text) {
@@ -37,11 +37,11 @@ function messageIntent(text) {
 }
 
 function failureText(error) {
-  if (error.bindingChanged) return '员工身份绑定晚于或与这条消息同时发生，本条没有写入知识库。请确认当前员工绑定正确后，重新发送原文。';
-  if (error.status === 401 || error.status === 403) return '当前员工身份未绑定、已停用或没有所需范围权限。本条消息未能确认处理，请联系本公司管理员核对绑定与授权。';
-  if (error.status === 404) return '原对话或范围已不可用，请联系管理员核对；本次没有确认保存。';
-  if (error.status === 400 || error.status === 409) return '本次未能确认处理：' + error.message + '。请核对后重新发送；如曾收到保存编号，请先查该编号以免重复。';
-  return '知识库暂时无法确认处理结果，已停止自动重试。请稍后先查询是否已有本条记录，再决定是否重发。';
+  if (error.bindingChanged) return '这条消息进来的时候，你的身份还没绑定好，所以没存进去。确认绑定没问题后，把原文再发我一次就行。';
+  if (error.status === 401 || error.status === 403) return '这条没处理成：你的账号还没绑定，或者没有对应范围的权限。找管理员（李任重）开通一下，再发一次就好。';
+  if (error.status === 404) return '之前的对话或范围不存在了，麻烦把内容重新发我一次。';
+  if (error.status === 400 || error.status === 409) return '这条没处理成：' + error.message + '。核对一下再发我；如果之前收到过保存编号，先查一下别重复存。';
+  return '知识库这边暂时没处理完，我先不重试了。麻烦稍后发一句“查一下刚才那条”确认有没有存上，再决定要不要重发。';
 }
 
 /** Processes durable jobs; no model, global library token or business decision lives in this adapter. */
@@ -58,27 +58,28 @@ export class CollectorWorker {
     if (command) {
       const selection = command[1]?.trim();
       if (!selection) return {reply: listScopes(scopes)};
-      if (selection === '全部') { this.inbox.select(job, null); return {reply: '已恢复在本公司获准范围内查询。录入时仍需明确一个保存范围。'}; }
+      if (selection === '全部') { this.inbox.select(job, null); return {reply: '好的，恢复全部范围。之后录入我会自动判断存到哪里，你不用管。'}; }
       const matches = scopes.filter(s => s.id === selection || s.name === selection);
-      if (matches.length !== 1) return {reply: '没有唯一匹配的获准范围，请使用完整编号。\n' + listScopes(scopes)};
+      if (matches.length !== 1) return {reply: '没太确定你指的是哪个范围，看一下列表用完整名称告诉我：\n' + listScopes(scopes)};
       this.inbox.select(job, matches[0].id);
-      return {reply: '当前范围已选择：' + matches[0].name + '。请发送要录入的原文或问题；此前需要选范围的消息尚未保存。'};
+      return {reply: '好，接下来都围绕【' + matches[0].name + '】。直接把要录入的原文或问题发我就行。'};
     }
-    if (/^(?:作废|删除|撤回|撤销)\s*(?:记录)?\s*#/.test(job.text)) return {reply: '撤回或更正请通过已登录的知识库客户端操作，携带记录编号与当前版本；聊天中本次没有执行删除。'};
+    if (/^(?:作废|删除|撤回|撤销)\s*(?:记录)?\s*#/.test(job.text)) return {reply: '撤回记录需要在知识库网页端操作（带上记录编号），我在聊天里不能替你删，免得误删。'};
     const payload = messageIntent(job.text.trim());
     if (!payload.text) return {reply: HELP};
     const selected = this.inbox.preference(job);
     if (selected && !scopes.some(s => s.id === selected)) {
       this.inbox.select(job, null);
-      return {reply: '之前选定的范围已不可用，本条尚未处理。\n' + listScopes(scopes)};
+      return {reply: '你之前选定的范围现在用不了（可能已停用），本条先没处理。\n' + listScopes(scopes)};
     }
     let chosen = selected ? scopes.filter(s => s.id === selected) : scopes;
     if (payload.intent === 'save') {
       const writers = chosen.filter(s => s.role === 'writer');
-      if (writers.length !== 1) return {reply: '这条原文尚未保存，请先选择一个可录入范围，再重发原文。\n' + listScopes(chosen)};
+      if (!writers.length) return {reply: '你现在没有可录入的范围（都是只读），本条还没保存，请联系管理员开通录入权限。\n' + listScopes(chosen)};
+      // 多个可写范围交给知识库自动推导落点，员工无需先选范围。
       chosen = writers;
     }
-    if (chosen.length > 40) return {reply: '可查询范围超过40个，请先发送“/范围 完整范围编号”缩小范围，再重发。'};
+    if (chosen.length > 40) return {reply: '范围有点多（超过40个），先发「/范围 完整名称」锁定一个，再重发～'};
     if (new Set(chosen.map(s => s.tenant_id)).size > 1) throw fail('一次只能处理一家公司的信息，请先选择范围');
     const scopeIds = chosen.map(s => s.id).sort();
     let conversation = this.inbox.conversation(job, scopeIds);
@@ -151,9 +152,19 @@ export class CollectorWorker {
         if (response.status !== 'completed' || !response.result?.answer || typeof response.request_id !== 'string') throw fail('知识助手仍在处理', 503);
         requestId = response.request_id;
         reply = response.result.answer;
-        if (response.result.kind === 'needs_clarification' && response.result.clarification?.scope_ids) reply += '\n' + listScopes(scopes);
+        if (response.result.kind === 'needs_clarification' && response.result.clarification?.scope_ids?.length) {
+          const names = response.result.clarification.scope_ids
+            .map(id => scopes.find(scope => scope.id === id)?.name).filter(Boolean);
+          if (names.length) reply += '\n可以选：' + names.map(name => '【' + name + '】').join('、');
+        }
         const citations = (response.result.citations ?? []).filter(item => item?.id);
-        if (response.result.kind !== 'saved' && citations.length) reply += '\n来源：' + citations.map(c => '#' + c.id.slice(0, 8)).join('、');
+        if (response.result.kind !== 'saved' && citations.length) {
+          reply += '\n来源：' + [...new Set(citations.map(cite => {
+            const who = cite.author ?? '同事';
+            const when = cite.occurred_at ? String(cite.occurred_at).slice(0, 10) : '';
+            return when ? `${who} ${when}` : who;
+          }))].join('、');
+        }
       }
       await this.deliver(job, reply, check);
       this.inbox.finish(job);

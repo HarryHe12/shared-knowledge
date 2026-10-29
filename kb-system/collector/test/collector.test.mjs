@@ -112,7 +112,7 @@ test('signed callbacks are durably queued before acknowledgement and run under s
     assert.equal(f.sent.length, 1);
     await callback(f.base, {user: 'bob', id: '102', text: '问：本店进展'}); await f.worker.runOnce();
     assert.equal(f.sent[1].user, 'bob');
-    assert.match(f.sent[1].text, /来源：#record01/);
+    assert.match(f.sent[1].text, /来源：同事/);
     assert.deepEqual(f.core.calls.filter(c => c.path === '/api/v1/conversations').map(c => c.body.scope_ids), [['store-a'], ['store-b']]);
     assert.ok(f.core.calls.every(c => c.redirect === 'error'));
     const completed = f.inbox.db.prepare('SELECT text,input,output,status FROM collector_inbox ORDER BY seq').all();
@@ -133,7 +133,7 @@ test('unconfigured, unsigned, unbound and unsupported callbacks cannot silently 
   try {
     g.core.bound = false;
     await callback(g.base); await g.worker.runOnce();
-    assert.match(g.sent[0].text, /未绑定/);
+    assert.match(g.sent[0].text, /还没绑定/);
     assert.equal(g.core.calls.filter(c => c.path.includes('conversations')).length, 0);
     assert.match(passive(await (await callback(g.base, {id: '2', type: 'image'})).text()), /尚未入库/);
   } finally { await g.close(); }
@@ -150,8 +150,8 @@ test('a queued message cannot be reassigned to an employee binding created after
       await f.worker.runOnce();
       assert.equal(f.core.records.size, 0);
       assert.equal(f.core.calls.filter(c => c.path.includes('/conversations')).length, 0);
-      assert.match(f.sent[0].text, /本条没有写入知识库/);
-      assert.match(f.sent[0].text, /重新发送原文/);
+      assert.match(f.sent[0].text, /没存进去/);
+      assert.match(f.sent[0].text, /把原文再发我一次/);
     } finally { await f.close(); }
   }
 });
@@ -197,13 +197,13 @@ test('blank database configuration uses a persistent default and worker counts a
   } finally { await app?.close(); rmSync(directory, {recursive: true, force: true}); }
 });
 
-test('multi-scope saves require a safe choice, while questions query the authorized company union', async () => {
+test('multi-scope saves delegate scope choice to the core derivation, while questions query the authorized company union', async () => {
   const f = await fixture();
   try {
     f.core.scopes.alice = [...scopes, {id: 'store-a-managers', name: '甲门店管理', tenant_id: 'company', role: 'writer'}];
     await callback(f.base); await f.worker.runOnce();
-    assert.match(f.sent.at(-1).text, /尚未保存/);
-    assert.equal(f.core.records.size, 0);
+    assert.match(f.sent.at(-1).text, /可以选：【甲门店工作】、【甲门店管理】/);
+    assert.deepEqual(f.core.calls.find(c => c.path === '/api/v1/conversations').body.scope_ids, ['store-a', 'store-a-managers']);
     await callback(f.base, {id: '2', text: '问：甲店培训怎么样'}); await f.worker.runOnce();
     assert.deepEqual(f.core.calls.find(c => c.path === '/api/v1/conversations').body.scope_ids, ['store-a', 'store-a-managers']);
     await callback(f.base, {id: '3', text: '/范围 甲门店管理'}); await f.worker.runOnce();
@@ -229,7 +229,7 @@ test('a lost core save response retries the frozen message without duplicate rec
     assert.equal(requests[0].path, requests[1].path);
     f.core.afterMessage = () => { f.core.scopes.alice = []; };
     await callback(f.base, {id: '2', text: '问：敏感进展'}); await f.worker.runOnce();
-    assert.match(f.sent.at(-1).text, /没有所需范围权限/);
+    assert.match(f.sent.at(-1).text, /没有对应范围的权限/);
     assert.ok(!f.sent.at(-1).text.includes('项目正在推进'));
   } finally { await f.close(); }
 });
@@ -294,7 +294,7 @@ test('push failures retry durable messages and unavailable core stops after the 
     f.worker.kb.fetch = async () => { throw new Error('core unavailable'); };
     await callback(f.base, {id: '2'}); await f.worker.runOnce();
     now += 10000; await f.worker.runOnce();
-    assert.match(f.sent.at(-1).text, /停止自动重试/);
+    assert.match(f.sent.at(-1).text, /我先不重试了/);
     const dead = f.inbox.db.prepare("SELECT * FROM collector_inbox WHERE status='dead'").get();
     assert.equal(dead.attempts, 2); assert.equal(dead.text, null); assert.equal(dead.input, null);
     assert.equal(await f.worker.runOnce(), false);

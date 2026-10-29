@@ -331,7 +331,7 @@ test('多范围对话只允许同公司，全部授权后检索，返回逐范�
   const save = await f.chat.send(f.user, conversation.id, message('盘点全部完成', 'save', 'multi-save'));
   assert.equal(save.result.kind, 'saved');
   assert.equal(save.result.record.scope_id, conversation.scope_id);
-  assert.match(save.result.answer, /已记入/);
+  assert.match(save.result.answer, /已存入/);
   assert.equal(f.store.records(f.user, f.project.id).length + f.store.records(f.user, second.id).length, before + 1);
   f.allowed.delete(second.id);
   await assert.rejects(f.chat.send(f.user, conversation.id, message('盘点', 'query', 'all-scope-guard')), {status: 403});
@@ -429,7 +429,7 @@ test('回复“换到XX”把最近一条记录改存到其他范围，原记录
   assert.equal(first.result.record.scope_id, f.scopes.pub);
   const moved = await f.chat.send(f.user, conversation.id, message('换到和生汇', 'auto', 'r2'));
   assert.equal(moved.result.kind, 'saved');
-  assert.match(moved.result.answer, /改存到【胡叨叨 · 和生汇 · 员工协作】/);
+  assert.match(moved.result.answer, /挪到【胡叨叨 · 和生汇 · 员工协作】/);
   assert.equal(moved.result.record.scope_id, f.scopes.s1staff);
   assert.equal(f.store.records(f.user, f.scopes.s1staff)[0]?.text, '今天工作一切正常');
   assert.equal(f.store.records(f.user, f.scopes.pub).length, 0);
@@ -441,7 +441,7 @@ test('回复“换到XX”把最近一条记录改存到其他范围，原记录
   assert.ok(bare.result.clarification.scope_ids.length >= 1);
   const goods = await f.chat.send(f.user, conversation.id, message('换货流程怎么操作', 'auto', 'r4'));
   assert.equal(goods.result.kind, 'needs_clarification');
-  assert.match(goods.result.answer, /保存为工作记录，还是查询/);
+  assert.match(goods.result.answer, /存进知识库，还是想查点什么/);
 });
 
 test('普通店员只有一个可写范围时保存零打扰，不回执范围选择提示', async t => {
@@ -456,6 +456,6 @@ test('普通店员只有一个可写范围时保存零打扰，不回执范围�
   const result = await f.chat.send(clerk, conversation.id, message('今天一切正常', 'save', 'c1'));
   assert.equal(result.result.kind, 'saved');
   assert.equal(result.result.record.scope_id, f.scopes.s1staff);
-  assert.match(result.result.answer, /已记入【胡叨叨 · 和生汇 · 员工协作】/);
+  assert.match(result.result.answer, /已存入【胡叨叨 · 和生汇 · 员工协作】/);
   assert.ok(!/换/.test(result.result.answer));
 });
