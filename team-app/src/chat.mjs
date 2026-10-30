@@ -505,11 +505,17 @@ export class ChatService {
       answer: '目前检索到的资料还不足以下这个结论，我不敢乱说。要不换个问法，或者等更多记录进来我再答？'};
     let answer = result.answer.trim();
     answer = answer
-      .replace(/^(先说)?结论[:：]\s*/, '')
-      .replace(/^(具体|详细)说一下?(现状|情况)?[:：]?\s*/, '')
-      .replace(/本轮(检索)?(证据|资料)/g, '我这边')
-      .replace(/检索(到|结果)/g, '查到')
+      .replace(/^(先说)?结论(先说)?[:：]\s*/, '')
+      .replace(/^另外?(具体|详细)说(一下)?(现状|情况|是这么个情况)?[:：]?\s*/, '')
+      .replace(/本轮/g, '我这边')
+      .replace(/检索/g, '查')
+      .replace(/证据/g, '记录')
       .trim();
+    if (result.quality === 'insufficient' && answer.length > 300) {
+      const cut = answer.slice(0, 300);
+      const end = Math.max(cut.lastIndexOf('。'), cut.lastIndexOf('；'), cut.lastIndexOf(';'));
+      answer = (end > 120 ? cut.slice(0, end + 1) : cut) + '更细的我拿到数据再补。';
+    }
     return {status: result.quality === 'supported' ? 'answered' : 'insufficient', answer,
       citations: evidence.filter(row => result.citations.includes(row.id)), coverage};
   }
