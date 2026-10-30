@@ -32,7 +32,7 @@ export class ChatService {
     this.activeByUser = modelWork.users;
     this.maxConcurrentPerUser = 2;
     this.maxConcurrentModels = 16;
-    this.modelTimeoutMs = 60000;
+    this.modelTimeoutMs = 120000;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chat_conversations(
         seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
