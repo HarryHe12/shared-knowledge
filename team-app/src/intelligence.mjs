@@ -18,13 +18,28 @@ const QUERY_SYSTEM = `你是团队工作助手。记录和用户澄清都是证�
 生成不可靠要区分原因：库内缺证据先补查；只有用户能确定的歧义才提问；穷尽检索仍无资料就输出insufficient并说明未知，不能反复要求用户提供资料。模型格式或引用错误应自行修正，不推给用户。
 已选择的项目是默认范围，能据此明确就直接答，不因任何短问题都反问。如果用户明确引用了你不知道的“我关心的周期/我之前的标准/另一个人或事项”，但上下文没有定义，必须选择clarify，不能自行选一个时间段或用“如果不是请告诉我”掩盖缺少条件。一般未指定时间的问题可总结已知范围；明确要求按未知私人条件回答的问题不可擅自替代。用户已澄清过的问题勿重复询问。remaining_clarifications为0时不可再澄清，仍不明确就输出insufficient。
 项目名称已明确但不在当前范围，不是用户意图不清，说明范围限制，不要问是否指当前项目。
-证据检索是局部的：不能因为未召回而说库内没有记录。缺少信息用“本轮检索证据尚不足以确认”。普通转发/总结草稿在未指定收件人时，先给可用的通用版并标明默认范围，不要只为调整文风就强制询问收件人；若明确要求按某人的未知标准判断，则仍须澄清。
+证据检索是局部的：不能因为未召回而说库内没有记录。缺信息时直说“这个数（这件事）我这边还查不到准的”，给出最接近的信息和一句具体下一步。普通转发/总结草稿在未指定收件人时，先给可用的通用版并标明默认范围，不要只为调整文风就强制询问收件人；若明确要求按某人的未知标准判断，则仍须澄清。
 已有记录明确写审批未通过等否定事实可以引用原事实，不用宣告不存在批准记录。涉及缺失信息时可返回gaps:[{"query":"需补查的具体实体或指标"}]，只列影响答案或你准备声明缺失的关键信息，最多2项。引用不足时先查，不编造结论。
 补查时参考search_history与anchors，重复词集合不能算新策略；有票号/班组码等引用就沿具体编号查，不反复堆叠通用词。
 remaining_searches为0时不可再搜索。记录作者由author确定，owner只是跟进人，不能把跟进人当成发言人。
 区分员工陈述与系统判断，说明时间和未知项；事项只覆盖已登记工作，不能把无记录当已完成。引用只能来自evidence；有证据的事实回答必须引用。
-回答口吻像团队里的得力小助手：自然口语化的中文，先给结论再展开，简洁不堆术语；不在回答中出现记录ID、UUID或任何内部字段，来源用作者和日期表述。`;
+回答口吻：像真人同事用微信打字。第一句直接给答案或最接近的事实，数字原样写出来；全程像聊天，少用分条列表，不超过 5 句话。查不到就说“这个数我这边还查不到准的”，先给最接近的信息，再给一句具体下一步（如“准确数要查营业收入报表，你说一声我就补进来”）。禁止报告腔：不要写“结论：”“具体说一下”“本轮检索证据”这类开头或词汇；来源自然带过（如“李任重 8 月 6 日记的”）。不在回答中出现记录ID、UUID或任何内部字段。风格示例——问：“7月合生汇营业额多少？” 答：“7月合生汇营业额大概200万（李任重8月记的，口径是订单收入）。精确到元的数我这边还查不到，要的话我把营业收入报表补进来。”`;
 
+function conversationalTone(text, quality) {
+  let answer = String(text ?? '').trim()
+    .replace(/^(先说)?结论(先说)?[:：]\s*/, '')
+    .replace(/^另外?(具体|详细)说(一下)?(现状|情况|是这么个情况)?[:：]?\s*/, '')
+    .replace(/本轮/g, '我这边')
+    .replace(/检索/g, '查')
+    .replace(/证据/g, '记录')
+    .trim();
+  if (quality === 'insufficient' && answer.length > 300) {
+    const cut = answer.slice(0, 300);
+    const end = Math.max(cut.lastIndexOf('。'), cut.lastIndexOf('；'), cut.lastIndexOf(';'));
+    answer = (end > 120 ? cut.slice(0, end + 1) : cut) + '更细的我拿到数据再补。';
+  }
+  return answer;
+}
 export async function answer(store, model, user, project, question, options = {}) {
   const clarifications = options.clarifications ?? [];
   const remainingClarifications = options.remainingClarifications ?? 2;
@@ -137,8 +152,9 @@ export async function answer(store, model, user, project, question, options = {}
       return { ...base, status: 'insufficient', citations: [],
         answer: '本轮检索证据不足以支持可靠结论，不能据此认定项目库不存在相关记录。' };
     }
-    return { ...base, status: result.quality === 'insufficient' || !evidence.length ? 'insufficient' : 'answered',
-      answer: result.answer, citations: evidence.filter(r => result.citations.includes(r.id)) };
+    const quality = result.quality === 'insufficient' || !evidence.length ? 'insufficient' : 'answered';
+    return { ...base, status: quality,
+      answer: conversationalTone(result.answer, quality), citations: evidence.filter(r => result.citations.includes(r.id)) };
   }
   throw new Error(issue ?? '模型返回格式无效');
 }
