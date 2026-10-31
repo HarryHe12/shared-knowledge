@@ -66,17 +66,52 @@ test('查询只读且返回版本化来源，模型没有保存权限也可以�
   await assert.rejects(f.chat.send(f.user, conversation.id, message('试图保存', 'save', 'not-allowed')), {status: 403});
 });
 
-test('自动意图解析失败或问题被误判保存时询问用户，不产生知识记录', async t => {
+test('自动意图不再反问：解析失败时像问题就查询、否则直接记下；闲聊不入库', async t => {
   const f = fixture(t, async () => 'not valid JSON'), conversation = f.create();
   const first = await f.chat.send(f.user, conversation.id, message('盘点完成了', 'auto', 'ambiguous'));
-  assert.equal(first.result.kind, 'needs_clarification');
-  f.chat.model = async () => JSON.stringify({intent: 'save'});
+  assert.equal(first.result.kind, 'saved');
+  assert.equal(first.result.answer, '记下了👌');
+  assert.equal(f.store.records(f.user, f.project.id).length, 1);
+  f.chat.model = async system => system.includes('判断') ? JSON.stringify({intent: 'save'}) : '一店盘点已经做完了 [1]';
   const second = await f.chat.send(f.user, conversation.id, message('盘点情况怎么样？', 'auto', 'question'));
-  assert.equal(second.result.kind, 'needs_clarification');
-  assert.equal(f.store.records(f.user, f.project.id).length, 0);
+  assert.equal(second.result.kind, 'answer');
+  assert.equal(second.result.answer, '一店盘点已经做完了');
+  assert.equal(f.store.records(f.user, f.project.id).length, 1);
+  f.chat.model = async () => JSON.stringify({intent: 'save', reply: '收到，一店盘点完了，记下了👌'});
   const third = await f.chat.send(f.user, conversation.id, message('记录：一店今天已完成盘点', 'auto', 'fact'));
   assert.equal(third.result.kind, 'saved');
+  assert.equal(third.result.answer, '收到，一店盘点完了，记下了👌');
   assert.equal(f.store.items(f.user, f.project.id).length, 0);
+  f.chat.model = async () => JSON.stringify({intent: 'chat', reply: '早呀～今天有啥要记的直接说'});
+  const hello = await f.chat.send(f.user, conversation.id, message('早上好', 'auto', 'hello'));
+  assert.equal(hello.result.kind, 'chat');
+  assert.match(hello.result.answer, /早呀/);
+  assert.equal(f.store.records(f.user, f.project.id).length, 2);
+});
+
+test('对话式回答：自然语言 + [n] 引用，带上最近几轮聊天，模型看不到内部ID', async t => {
+  const f = fixture(t), conversation = f.create();
+  const one = f.store.add(f.user, f.project.id, {text: '一店冷柜坏了，师傅周二来修，报价1800'});
+  const seen = [];
+  f.chat.model = async (system, input) => {
+    seen.push(input);
+    assert.equal(input.format, 'chat');
+    assert.match(system, /微信聊天/);
+    return seen.length === 1 ? '冷柜周二修，报价1800 [1]。' : '还是周二那次，没听说改时间 [1]';
+  };
+  const first = await f.chat.send(f.user, conversation.id, message('冷柜什么时候修', 'query', 'h1'));
+  assert.equal(first.result.answer, '冷柜周二修，报价1800。');
+  assert.equal(first.result.grounded, true);
+  assert.deepEqual(first.result.citations.map(row => row.id), [one.id]);
+  const second = await f.chat.send(f.user, conversation.id, message('改时间了吗', 'query', 'h2'));
+  assert.equal(second.result.answer, '还是周二那次，没听说改时间');
+  assert.deepEqual(seen[1].history.map(turn => turn.role), ['user', 'assistant']);
+  assert.equal(seen[1].history[0].text, '冷柜什么时候修');
+  const {renderAnswerPrompt} = await import('../src/conversation.mjs');
+  const prompt = renderAnswerPrompt(seen[1]);
+  assert.ok(!prompt.includes(one.id), '提示词不出现记录ID');
+  assert.match(prompt, /\[1\] 店长甲/);
+  assert.match(prompt, /同事：冷柜什么时候修/);
 });
 
 test('同一幂等请求并发只生成一次，完成后可查询处理结果', async t => {
@@ -331,7 +366,7 @@ test('多范围对话只允许同公司，全部授权后检索，返回逐范�
   const save = await f.chat.send(f.user, conversation.id, message('盘点全部完成', 'save', 'multi-save'));
   assert.equal(save.result.kind, 'saved');
   assert.equal(save.result.record.scope_id, conversation.scope_id);
-  assert.match(save.result.answer, /已存入/);
+  assert.match(save.result.answer, /放在【/);
   assert.equal(f.store.records(f.user, f.project.id).length + f.store.records(f.user, second.id).length, before + 1);
   f.allowed.delete(second.id);
   await assert.rejects(f.chat.send(f.user, conversation.id, message('盘点', 'query', 'all-scope-guard')), {status: 403});
@@ -440,8 +475,8 @@ test('回复“换到XX”把最近一条记录改存到其他范围，原记录
   assert.equal(bare.result.kind, 'needs_clarification');
   assert.ok(bare.result.clarification.scope_ids.length >= 1);
   const goods = await f.chat.send(f.user, conversation.id, message('换货流程怎么操作', 'auto', 'r4'));
-  assert.equal(goods.result.kind, 'needs_clarification');
-  assert.match(goods.result.answer, /存进知识库，还是想查点什么/);
+  assert.equal(goods.result.kind, 'answer');
+  assert.equal(f.store.records(f.user, f.scopes.s1staff).length, 1);
 });
 
 test('普通店员只有一个可写范围时保存零打扰，不回执范围选择提示', async t => {
@@ -456,6 +491,6 @@ test('普通店员只有一个可写范围时保存零打扰，不回执范围�
   const result = await f.chat.send(clerk, conversation.id, message('今天一切正常', 'save', 'c1'));
   assert.equal(result.result.kind, 'saved');
   assert.equal(result.result.record.scope_id, f.scopes.s1staff);
-  assert.match(result.result.answer, /已存入【胡叨叨 · 和生汇 · 员工协作】/);
+  assert.equal(result.result.answer, '记下了👌');
   assert.ok(!/换/.test(result.result.answer));
 });

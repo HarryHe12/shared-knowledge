@@ -8,7 +8,7 @@ import {DurableInbox} from './inbox.mjs';
 import {handleAgentApi} from './agent-api.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
-const HELP = '我是咱们团队的知识库小助手 🙌 直接把工作进展发给我，我会自动存进对应的项目；有问题也直接问，我查完回复你。存错范围的话，回我「换到 XX」就能改。发送「范围」可以看我管着哪些项目；想固定在某个项目里聊，发「/范围 项目名」。暂时只支持文字（语音请先转文字，图片麻烦先打成文字描述）。';
+const HELP = '我是团队的知识助手小知 🙌 有啥直接跟我说就行：工作上的进展、决定、想法发给我，我帮你记着；想问什么也直接问，我翻翻大家记过的内容告诉你。暂时只认文字（语音可以先转成文字再发）。';
 
 /** WeCom text messages allow 2048 UTF-8 bytes. Split by code point, with room for framing. */
 export function splitReply(value, maxBytes = 1800) {
@@ -157,14 +157,7 @@ export class CollectorWorker {
             .map(id => scopes.find(scope => scope.id === id)?.name).filter(Boolean);
           if (names.length) reply += '\n可以选：' + names.map(name => '【' + name + '】').join('、');
         }
-        const citations = (response.result.citations ?? []).filter(item => item?.id);
-        if (response.result.kind !== 'saved' && citations.length) {
-          reply += '\n来源：' + [...new Set(citations.map(cite => {
-            const who = cite.author ?? '同事';
-            const when = cite.occurred_at ? String(cite.occurred_at).slice(0, 10) : '';
-            return when ? `${who} ${when}` : who;
-          }))].join('、');
-        }
+        // 来源由回答本身自然带出（“小李 10 月 28 日说的”），不再在末尾追加一行来源列表。
       }
       await this.deliver(job, reply, check);
       this.inbox.finish(job);
@@ -253,9 +246,10 @@ export function createCollector({env = process.env, fetchImpl = fetch, wecom, in
       if (!msgId || !Number.isFinite(seconds) || seconds <= 0) return respond(400, 'missing message identity');
       const occurredAt = new Date(seconds * 1000).toISOString();
       const job = inbox.enqueue({appId, externalId: userId, msgId, text: text.trim(), occurredAt});
-      // This response confirms durable receipt, never an unverified save.
-      return reply(job.status === 'done' ? '这条消息已处理，请查看此前答复。' : job.status === 'dead'
-        ? '这条消息之前未能确认处理，请联系管理员核对后再发送。' : '已收到并进入处理队列，完成后会另发结果；这条回执尚不表示已入库。');
+      // 新消息不再先回一句“已进入队列”的机器腔回执：空响应表示已收到，真正的回答稍后推送。
+      if (job.status !== 'done' && job.status !== 'dead') return respond(200, '');
+      return reply(job.status === 'done' ? '这条我已经回过你啦，往上翻翻看～'
+        : '这条之前没处理成功，我这边先不重试了，麻烦把内容再发我一次。');
     } catch (error) {
       logger.error?.('[collector] callback failed', error.status ?? 503);
       if (!res.headersSent) respond(error.status ?? 503, error.status ? error.message : '消息未确认接收，请稍后重试');

@@ -103,7 +103,7 @@ test('signed callbacks are durably queued before acknowledgement and run under s
   try {
     const response = await callback(f.base);
     assert.equal(response.status, 200);
-    assert.match(passive(await response.text()), /尚不表示已入库/);
+    assert.equal(await response.text(), '');
     assert.equal(f.core.calls.length, 0);
     assert.equal(f.inbox.db.prepare('SELECT count(*) AS n FROM collector_inbox').get().n, 1);
     await f.worker.runOnce();
@@ -112,7 +112,7 @@ test('signed callbacks are durably queued before acknowledgement and run under s
     assert.equal(f.sent.length, 1);
     await callback(f.base, {user: 'bob', id: '102', text: '问：本店进展'}); await f.worker.runOnce();
     assert.equal(f.sent[1].user, 'bob');
-    assert.match(f.sent[1].text, /来源：同事/);
+    assert.ok(!/来源：/.test(f.sent[1].text));
     assert.deepEqual(f.core.calls.filter(c => c.path === '/api/v1/conversations').map(c => c.body.scope_ids), [['store-a'], ['store-b']]);
     assert.ok(f.core.calls.every(c => c.redirect === 'error'));
     const completed = f.inbox.db.prepare('SELECT text,input,output,status FROM collector_inbox ORDER BY seq').all();
