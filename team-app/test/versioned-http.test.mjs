@@ -93,7 +93,7 @@ test('授权汇总只能在同公司，保存自动推导落点；读者不能�
   const c=await r('/api/v1/conversations',{scope_ids:[f.first.id,f.second.id]});assert.equal(c.status,200);
   const save=await r('/api/v1/conversations/'+c.data.id+'/messages',{text:'各店完成',intent:'save',idempotency_key:'ambiguous'});
   assert.equal(save.data.result.kind,'saved');
-  assert.match(save.data.result.answer,/已存入/);
+  assert.match(save.data.result.answer,/记下了.*放在【/);
   assert.equal(f.store.records(f.owner.user,f.first.id).length+f.store.records(f.owner.user,f.second.id).length,1);
   assert.equal([f.first.id,f.second.id].includes(save.data.result.record.scope_id),true);
   f.auth.manage(f.owner.user,{action:'grant',id:f.staff.id,scope:f.first.id,role:'reader'});
