@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.8.0 (2026-11-01)
+
+### 新增：多模型自动容灾链与零填空 Agent 客户端
+
+- `team-app/src/intelligence.mjs` 新增 `TEAM_MODEL_CHAIN="providerA/modelA,providerB/modelB,..."` 有序降级链（`parseModelChain` / `runModelChain`）：主模型超时、异常或返回空内容时自动无缝切换下一候选模型，直至保底模型完成响应；未配置 `TEAM_MODEL_CHAIN` 时完全兼容原有 `TEAM_PROVIDER` / `TEAM_MODEL`。
+- `team-app/scripts/knowledge.mjs` 升级零填空 Agent 体验：
+  - `login --wait` 支持等待浏览器确认设备码后自动领取凭证，并根据已授权范围自动设置默认范围，无需手工抄范围 ID。
+  - 新增 `search-all --query TEXT`（及 `search --all`），一次跨员工在当前公司内的全部授权范围检索证据。
+  - 新增 `chat-save --text TEXT`（支持复用稳定 Agent 录入会话与 `--idempotency`），按门店/品牌关键词和员工岗位自动推导可写范围保存；`save` / `extract` / `correct` 同步支持 `--text` 直接传参。
+- 同步更新 `team-app/skill/SKILL.md` 与 `team-app/README.md`，新增模型容灾链与客户端命令回归测试。
+
 ## v3.7.0 (2026-11-01)
 
 ### 改进：回答像真人同事
