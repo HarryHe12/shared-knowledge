@@ -104,15 +104,14 @@ npm run dev
 电脑端继续使用 [Skill](skill/SKILL.md) 和 [客户端](scripts/knowledge.mjs)：
 
 ```bash
-node team-app/scripts/knowledge.mjs login --url https://kb.example.test
+node team-app/scripts/knowledge.mjs login --url https://kb.example.test --wait
 node team-app/scripts/knowledge.mjs whoami
-node team-app/scripts/knowledge.mjs use-scope --scope '<范围ID>'
-node team-app/scripts/knowledge.mjs save --file /path/to/record.txt --idempotency '<本次唯一标识>'
-node team-app/scripts/knowledge.mjs search --query '冷柜维修进展'
+node team-app/scripts/knowledge.mjs search-all --query '冷柜维修进展'
+node team-app/scripts/knowledge.mjs chat-save --text '一店冷柜已修复，今晚复查' --idempotency '<本次唯一标识>'
 node team-app/scripts/knowledge.mjs state
 ```
 
-员工在浏览器确认本人设备，凭证保存在 macOS 钥匙串或 Windows 凭据管理器，不在配置文件或命令参数中；Linux 自动凭据适配尚未实现。Agent 名称和应用密钥不能赋予员工权限。现有 Skill 按单范围查询；公司汇总使用新 SDK/API 显式提供同公司的已授权范围。未提供 MCP Server，将来可在这些工具上增加符合官方授权规范的 MCP 适配。
+员工在浏览器确认本人设备后，`--wait` 自动领取凭证并记住默认范围；凭证保存在 macOS 钥匙串或 Windows 凭据管理器，不在配置文件或命令参数中；Linux 自动凭据适配尚未实现。Agent 名称和应用密钥不能赋予员工权限。`search-all` 自动汇总当前员工在公司内的已授权范围，`chat-save` 通过统一对话接口按关键词和岗位自动推导可写范围保存；也可通过 `use-scope --scope '<范围ID>'` 固定单范围操作。未提供 MCP Server，将来可在这些工具上增加符合官方授权规范的 MCP 适配。
 
 ## 未来内部小程序接入
 
@@ -203,7 +202,7 @@ const response = await kb.sendMessage(conversation.id, {
 
 ## 模型、质量和费用
 
-模型按需复用 pi 凭据和注册表，默认 `kimi-coding/k3`，可通过 `TEAM_PROVIDER`、`TEAM_MODEL` 选择。启动、直接保存、证据读取不要求生成模型可用，自动意图、提取和问答需要模型。失败会明确提示，不能冒充保存或结论。
+模型按需复用 pi 凭据和注册表，默认 `kimi-coding/k3`，可通过 `TEAM_PROVIDER`、`TEAM_MODEL` 选择单模型，或通过 `TEAM_MODEL_CHAIN="provider1/model1,provider2/model2,deepseek/deepseek-v4-flash"` 配置多模型顺序降级链（前置模型异常、超时或返回空内容时自动切换下一候选）。启动、直接保存、证据读取不要求生成模型可用，自动意图、提取和问答需要模型。失败会明确提示，不能冒充保存或结论。
 
 > 推荐问答使用按量付费的对话模型，例如 `TEAM_PROVIDER=deepseek`、`TEAM_MODEL=deepseek-v4-flash`（凭据用 `DEEPSEEK_API_KEY` 或 pi 凭据）。各家 Coding Plan / Token Plan 订阅套餐的条款通常只允许在编程工具里交互使用，禁止接入自建后端，存在停用风险。
 
