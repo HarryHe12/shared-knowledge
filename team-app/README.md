@@ -205,6 +205,10 @@ const response = await kb.sendMessage(conversation.id, {
 
 模型按需复用 pi 凭据和注册表，默认 `kimi-coding/k3`，可通过 `TEAM_PROVIDER`、`TEAM_MODEL` 选择。启动、直接保存、证据读取不要求生成模型可用，自动意图、提取和问答需要模型。失败会明确提示，不能冒充保存或结论。
 
+> 推荐问答使用按量付费的对话模型，例如 `TEAM_PROVIDER=deepseek`、`TEAM_MODEL=deepseek-v4-flash`（凭据用 `DEEPSEEK_API_KEY` 或 pi 凭据）。各家 Coding Plan / Token Plan 订阅套餐的条款通常只允许在编程工具里交互使用，禁止接入自建后端，存在停用风险。
+
+聊天问答采用对话式回答（`src/conversation.mjs`）：模型直接写自然语言，用 `[n]` 标注所用资料，系统把编号映射为引用并从正文中去掉；会带上同一对话最近 6 轮聊天，追问时连同上一句一起检索。自动意图分为 `save`（模型同时生成一句自然确认）、`query`、`chat`（问候、道谢不入库），不会反问“保存还是查询”。回答结果中的 `grounded` 表示是否引用了团队记录。
+
 可选检索配置见 `.env.retrieval.example` 和 [模型对比说明](eval/README.md)：`TEAM_RETRIEVAL_MODE=bm25|vector|hybrid|hybrid-rerank`，`TEAM_EMBEDDING_URL/MODEL/KEY`，`TEAM_RERANK_URL/MODEL/KEY`。
 
 默认全文模式不产生向量费用。向量缓存按范围、端点、模型、文本哈希隔离；当前仍是范围内精确扫描，缺失向量在查询时建立，不是大型 ANN 索引。外部服务会收到本次获准范围的文本，应选择公司允许的数据处理服务。
