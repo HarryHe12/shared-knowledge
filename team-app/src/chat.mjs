@@ -422,6 +422,16 @@ export class ChatService {
 
   async process(user, conversation, requestId, payload, context, heartbeat) {
     const epoch = this.epoch(), model = this.guardedModel(user, conversation, context, epoch, heartbeat);
+    const bindMatch = /^\s*(?:绑定|设备|绑定设备|设备码)?\s*[:：]?\s*([0-9a-f]{16})\s*$/i.exec(payload.text);
+    if (bindMatch) {
+      const code = bindMatch[1].toLowerCase();
+      try {
+        this.auth.bind(user, code);
+        return {kind: 'chat', answer: `电脑设备（设备码 ${code}）已成功绑定到你的账号【${user.name}】！电脑端 AI 现已解锁，可以直接使用啦👌`, citations: []};
+      } catch (e) {
+        return {kind: 'chat', answer: `设备码绑定失败：${e.message}。请核对电脑上显示的 16 位设备码是否正确，或是否已超过 10 分钟有效期。`, citations: []};
+      }
+    }
     if (payload.intent === 'auto') {
       // “换/换到 XX/改存”：把本对话最近一条已保存的记录改存到其他可写范围。
       const relocate = /^\s*(?:换(?!货)|改存)(?:到|至|成)?\s*[:：]?\s*(.*?)\s*$/.exec(payload.text);

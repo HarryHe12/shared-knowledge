@@ -163,4 +163,26 @@ test('CLI login --wait, auto-scope, chat-save --text idempotency, search-all and
   assert.ok(searchAll.coverage.scope_ids.includes(hsScope.id));
   const hitRecords = searchAll.results.flatMap(r => r.records);
   assert.ok(hitRecords.some(r => r.id === firstSave.result.record.id));
+
+  // 5. chat message with 16-hex device code binds device directly without browser
+  const devReq = auth.start();
+  const bindResp = await runCli(
+    ['chat-save', '--text', devReq.code, '--idempotency', 'device-bind-test-1'],
+    {},
+    deps,
+  );
+  assert.equal(bindResp.status, 'completed');
+  assert.equal(bindResp.result.kind, 'chat');
+  assert.match(bindResp.result.answer, /已成功绑定/);
+  const polled = auth.poll(devReq.device_token);
+  assert.equal(polled.status, 'approved');
+  assert.ok(polled.token);
+
+  // 6. auth.login accepts bound external_id in place of email
+  store.db.prepare('INSERT INTO channel_apps(id,name,channel,tenant_id,enabled) VALUES(?,?,?,?,1)')
+    .run('test-app', 'test-app', 'wecom', company.id);
+  store.db.prepare('INSERT INTO channel_bindings(app_id,external_id,user_id,active,verified_by,verified_at) VALUES(?,?,?,1,?,?)')
+    .run('test-app', 'test_user_alias', ownerId, ownerId, new Date().toISOString());
+  const extLogin = await auth.login({email: 'test_user_alias', password});
+  assert.ok(extLogin.token);
 });
