@@ -122,3 +122,50 @@ test('组织配置页面脚本可执行，动态名称通过文本节点渲染',
   assert.ok(!organizationPage.includes('innerHTML'));
   assert.match(organizationPage,/每行一家/);
 });
+
+test('Wiki 仅补查授权范围，原文更正后旧整理稿失效', async t => {
+  const {mkdtemp, rm} = await import('node:fs/promises');
+  const {join} = await import('node:path');
+  const {tmpdir} = await import('node:os');
+  const {createServer} = await import('node:http');
+  const {execFile} = await import('node:child_process');
+  const {promisify} = await import('node:util');
+  const {fileURLToPath} = await import('node:url');
+  const directory = await mkdtemp(join(tmpdir(), 'team-wiki-'));
+  const prior = process.env.TEAM_WIKI_DIR;
+  process.env.TEAM_WIKI_DIR = directory;
+  t.after(async () => {
+    if (prior === undefined) delete process.env.TEAM_WIKI_DIR;
+    else process.env.TEAM_WIKI_DIR = prior;
+    await rm(directory, {recursive: true, force: true});
+  });
+  const f = await fixture(t, async (_system, input) => input.wiki
+    ? '《入职手册》写明上午签到、下午领工牌。[1]'
+    : '上午签到。[1] 下午安排还不确定。[WIKI_NEEDED]');
+  const {first, second, staff, store, request} = f;
+  const record = store.add(staff.user, first.id, {text: '入职上午签到，下午领工牌。', changes: []});
+  const text = `上午签到，下午领工牌。[^${record.id.slice(0, 8)}]\n`;
+  const model = createServer((_request, response) => response.end(JSON.stringify({choices: [{message: {
+    content: '===PAGE: topics/入职手册.md===\n' + text + '===END===\n===INDEX===\n入职手册\n===END===',
+  }}]})));
+  model.listen(0, '127.0.0.1');
+  await once(model, 'listening');
+  t.after(() => new Promise(resolve => model.close(resolve)));
+  const compiler = fileURLToPath(new URL('../../kb-system/librarian/scripts/compile.mjs', import.meta.url));
+  await promisify(execFile)(process.execPath, [compiler], {env: {
+    ...process.env, KB_URL: f.base, KB_SERVICE_TOKEN: staff.token, KB_SERVICE_SCOPE: first.id,
+    KB_LLM_BASE_URL: 'http://127.0.0.1:' + model.address().port, KB_LLM_API_KEY: 'test-key', KB_LLM_MODEL: 'test-model',
+  }});
+  const lookup = id => request('/api/v1/wiki', {scope_ids: [id], query: '入职如何安排'}, staff.token);
+  assert.equal((await lookup(second.id)).status, 403);
+  assert.deepEqual((await lookup(first.id)).data.pages, [{
+    title: '入职手册', text, sources: [{id: record.id, project_id: first.id, version: 1}],
+  }]);
+  const conversation = await request('/api/v1/conversations', {scope_id: first.id}, staff.token);
+  const reply = await request('/api/v1/conversations/' + conversation.data.id + '/messages',
+    {text: '入职如何安排', intent: 'query', idempotency_key: 'wiki-partial'}, staff.token);
+  assert.equal(reply.data.result.answer, '《入职手册》写明上午签到、下午领工牌。');
+  assert.equal(reply.data.result.citations[0].id, record.id);
+  store.correct(staff.user, first.id, {id: record.id, version: 1, text: '入职下午签到。'});
+  assert.deepEqual((await lookup(first.id)).data.pages, []);
+});
