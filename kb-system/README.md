@@ -57,9 +57,11 @@ node --env-file=kb-system/.env kb-system/collector/src/server.mjs
 
 ## 旧 Wiki 和每日摘要
 
+按权限补查使用同一编译器的范围模式。按照[知识服务的 Wiki 配置](../team-app/README.md#wiki-补查)设置 `TEAM_WIKI_DIR` 后，编译器生成该范围的私有快照。
+
 旧 librarian 平面 Wiki 编译与静态名单推送默认停用，即使显式设置 `KB_ENABLE_LEGACY_EXPORT=1`，也拒绝组织管理的公司范围，避免把权限不同的资料写进统一目录或推送给无权员工。
 
-仅原有未绑定公司的私人范围可显式使用旧导出，必须提供获准身份 `KB_SERVICE_TOKEN` 和 `KB_SERVICE_SCOPE`。这些不是平台万能账号，也不授予超出账号的权限。旧编译器的计数游标、覆盖与删除依赖没有重写，不能作为受控公司知识事实来源。历史 Wiki 文件需另行限制访问，正式系统不向聊天检索导入这些文件。
+仅原有未绑定公司的私人范围可显式使用旧导出，必须提供获准身份 `KB_SERVICE_TOKEN` 和 `KB_SERVICE_SCOPE`。这些不是平台万能账号，也不授予超出账号的权限。旧编译器的计数游标、覆盖与删除依赖没有重写，不能作为受控公司知识事实来源。历史 Wiki 文件需另行限制访问，正式聊天使用新编译的范围快照。
 
 ## 验证
 
