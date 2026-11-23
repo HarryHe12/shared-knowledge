@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {extractFacts, factKey, knowledgeDay, lookupDay, STATUS_LABELS, verifyFacts} from './knowledge-facts.mjs';
+import {extractFacts, factKey, keyHash, knowledgeDay, lookupDay, STATUS_LABELS, verifyFacts} from './knowledge-facts.mjs';
 import {terms} from './store.mjs';
 import {retrieve} from './retrieval.mjs';
 import {anchoredLookup} from './query-policy.mjs';
@@ -22,6 +22,7 @@ function setup(db) {
       seq INTEGER NOT NULL REFERENCES knowledge_records(seq) ON DELETE CASCADE,
       ordinal INTEGER NOT NULL, key TEXT NOT NULL, subject TEXT NOT NULL, field TEXT NOT NULL,
       qualifier TEXT NOT NULL, value TEXT NOT NULL, starts_on TEXT, ends_on TEXT, item_id TEXT, status TEXT,
+      aliases TEXT NOT NULL DEFAULT '[]',
       PRIMARY KEY(seq,ordinal)
     );
     CREATE TRIGGER IF NOT EXISTS knowledge_record_saved AFTER INSERT ON records BEGIN
@@ -39,6 +40,9 @@ function setup(db) {
     db.exec('ALTER TABLE knowledge_records ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0');
   }
   addReviewState(db);
+  if (!db.prepare('PRAGMA table_info(knowledge_facts)').all().some(column => column.name === 'aliases')) {
+    db.exec("ALTER TABLE knowledge_facts ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 function addReviewState(db) {
@@ -66,6 +70,37 @@ function itemEntries(item) {
   const details = [item.owner && '跟进人 ' + item.owner, item.deadline && '截止 ' + item.deadline].filter(Boolean);
   if (!details.length) return [status];
   return [status, {id: item.details_source_id, subject: item.title, text: [item.title, ...details].join('，')}];
+}
+
+function effectiveFacts(orderedRows) {
+  const parents = new Map();
+  function root(key) {
+    while (parents.has(key)) key = parents.get(key);
+    return key;
+  }
+  const qualified = orderedRows.map(row => ({row, hash:keyHash(row.key)}));
+  for (const {row, hash} of qualified) {
+    for (const alias of JSON.parse(row.aliases)) {
+      const owner = root(hash), target = root(alias);
+      if (owner !== target) parents.set(target, owner);
+    }
+  }
+  const selected = new Map();
+  for (const {row, hash} of qualified) {
+    const key = root(hash);
+    if (!selected.has(key)) selected.set(key, row);
+  }
+  return [...selected.values()];
+}
+
+function rankNames(record, facts) {
+  const text = factKey(record.text), words = new Set(terms(record.text));
+  const score = label => terms(label).filter(word => words.has(word)).length;
+  const ranked = facts.map(row => ({
+    row, score:score(row.subject) + 4*score(row.field) + 2*score(row.qualifier) +
+      (text.includes(factKey(row.field)) ? 10 : 0),
+  }));
+  return ranked.sort((a,b) => b.score-a.score).slice(0,35).map(match => match.row);
 }
 
 function ranked(entries, query, limit) {
@@ -134,10 +169,16 @@ export class CurrentKnowledge {
     const now = this.now(), claim = randomUUID();
     const jobs = this.db.prepare(`SELECT k.seq,k.review_only,k.rejected,r.* FROM knowledge_records k ${sources}
       WHERE k.done=0 AND k.retry_at<=? AND ${active} ORDER BY k.seq`).iterate(now);
+    const skipped = new Set();
     for (const record of jobs) {
+      if (skipped.has(record.project_id)) continue;
+      skipped.add(record.project_id);
       if (!this.isActive(record.project_id)) continue;
       const changed = this.db.prepare(`UPDATE knowledge_records SET claim=?,retry_at=?,attempts=attempts+1
-        WHERE seq=? AND done=0 AND retry_at<=?`).run(claim, now + LEASE_MS, record.seq, now);
+        WHERE seq=? AND done=0 AND retry_at<=? AND NOT EXISTS(
+          SELECT 1 FROM knowledge_records k ${sources}
+          WHERE r.project_id=? AND k.seq<>? AND k.done=0 AND k.claim IS NOT NULL AND k.retry_at>? AND ${active}
+        )`).run(claim, now + LEASE_MS, record.seq, now, record.project_id, record.seq, now);
       if (changed.changes) return {...record, claim};
     }
     return null;
@@ -146,13 +187,10 @@ export class CurrentKnowledge {
   columns(record) {
     const items = this.db.prepare('SELECT id AS item_id,title FROM items WHERE project_id=? ORDER BY rowid DESC').all(record.project_id);
     items.sort((a, b) => Number(record.text.includes(b.title)) - Number(record.text.includes(a.title)));
-    const facts = this.db.prepare(`SELECT DISTINCT subject,field,qualifier FROM knowledge_facts f
+    const facts = this.db.prepare(`SELECT f.key,subject,field,qualifier,MAX(f.seq) AS seq FROM knowledge_facts f
       JOIN knowledge_records k USING(seq) ${sources}
-      WHERE r.project_id=? AND k.done=1 AND ${active} ORDER BY f.seq DESC LIMIT 250`).all(record.project_id);
-    const words = new Set(terms(record.text));
-    const score = row => terms(row.subject + ' ' + row.field).filter(word => words.has(word)).length;
-    facts.sort((a, b) => score(b) - score(a));
-    return [...items.slice(0, 25), ...facts.slice(0, 35)];
+      WHERE r.project_id=? AND k.done=1 AND ${active} AND item_id IS NULL GROUP BY f.key ORDER BY seq DESC`).all(record.project_id);
+    return [...items.slice(0,25), ...rankNames(record,facts)];
   }
 
   async runOnce(model) {
@@ -171,14 +209,15 @@ export class CurrentKnowledge {
   }
 
   async reviewRecord(model, record) {
+    const columns = this.columns(record);
     if (record.review_only) {
       const facts = this.db.prepare(`SELECT key,subject,field,qualifier,value,starts_on AS "from",ends_on AS "through",
         item_id AS itemId,status FROM knowledge_facts WHERE seq=? ORDER BY ordinal`).all(record.seq);
-      return verifyFacts(model, record, {facts, rejected: record.rejected});
+      return verifyFacts(model, record, {facts, rejected: record.rejected}, columns);
     }
     const name = this.db.prepare('SELECT name FROM projects WHERE id=?').get(record.project_id).name;
-    const extracted = await extractFacts(model, record, name, this.columns(record));
-    return verifyFacts(model, record, extracted);
+    const extracted = await extractFacts(model, record, name, columns);
+    return verifyFacts(model, record, extracted, columns);
   }
 
   complete(record, {facts, rejected}) {
@@ -199,9 +238,9 @@ export class CurrentKnowledge {
 
   insertFacts(seq, facts) {
     this.db.prepare('DELETE FROM knowledge_facts WHERE seq=?').run(seq);
-    const insert = this.db.prepare('INSERT INTO knowledge_facts VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+    const insert = this.db.prepare('INSERT INTO knowledge_facts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
     facts.forEach((fact, index) => insert.run(seq, index, fact.key, fact.subject, fact.field, fact.qualifier,
-      fact.value, fact.from, fact.through, fact.itemId, fact.status));
+      fact.value, fact.from, fact.through, fact.itemId, fact.status, JSON.stringify(fact.aliases ?? [])));
     if (this.serving) this.db.exec('UPDATE record_epoch SET value=value+1');
   }
 
@@ -231,16 +270,15 @@ export class CurrentKnowledge {
   }
 
   entries(scope, date = knowledgeDay(this.now()), includeItems = true) {
-    const selected = this.db.prepare(`
-      WITH latest AS (
-        SELECT f.*,k.record_id,ROW_NUMBER() OVER(PARTITION BY f.key ORDER BY f.seq DESC,f.ordinal DESC) AS rank
+    const rows = this.db.prepare(`
+        SELECT f.*,k.record_id
         FROM knowledge_facts f JOIN knowledge_records k USING(seq) ${sources}
         WHERE r.project_id=? AND k.done=1 AND ${active} AND f.item_id IS NULL
         AND (f.starts_on IS NULL OR f.starts_on<=?) AND (f.ends_on IS NULL OR f.ends_on>=?)
-      )
-      SELECT * FROM latest WHERE rank=1 ORDER BY key
+        ORDER BY f.seq DESC,f.ordinal DESC
     `).all(scope, date, date);
-    const facts = selected.map(row => ({id: row.record_id, subject: row.subject, text: factLine(row)}));
+    const facts = effectiveFacts(rows).sort((a,b)=>a.key.localeCompare(b.key))
+      .map(row => ({id: row.record_id, subject: row.subject, text: factLine(row)}));
     return includeItems ? facts.concat(this.stateRows(scope).flatMap(itemEntries)) : facts;
   }
 

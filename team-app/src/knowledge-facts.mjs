@@ -1,9 +1,12 @@
+import {createHash} from 'node:crypto';
+
 export const STATUS_LABELS = {open: '进行中', blocked: '阻塞', done: '已完成', cancelled: '已取消'};
 const DAY = 86400000;
 const isoDay = date => date.toISOString().slice(0, 10);
 export const knowledgeDay = (now = Date.now()) => isoDay(new Date(now + 8 * 3600000));
 const normalized = value => value.normalize('NFKC').trim().replace(/\s+/g, ' ');
 export const factKey = value => normalized(value).toLowerCase().replace(/[\p{P}\s]/gu, '');
+export const keyHash = key => createHash('sha256').update(key).digest('hex');
 
 function isDay(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -69,7 +72,8 @@ function validatedFact(row, source, items) {
 }
 
 export async function extractFacts(model, record, scope, candidates) {
-  const input = {task: 'knowledge-facts', text: record.text, occurred_on: knowledgeDay(Date.parse(record.occurred_at)), scope, candidates};
+  const labels = candidates.map(({key, seq, ...candidate}) => candidate);
+  const input = {task: 'knowledge-facts', text: record.text, occurred_on: knowledgeDay(Date.parse(record.occurred_at)), scope, candidates: labels};
   const response = await model(record.author_id, EXTRACT_FACTS, input);
   const data = modelJson(response);
   if (!Array.isArray(data?.facts) || data.facts.length > 160) throw new Error('知识事实提取结果无效');
@@ -81,21 +85,36 @@ function modelJson(response) {
   return JSON.parse(String(response).trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi, ''));
 }
 
-const VERIFY_FACTS = `独立复核知识事实。原文和候选均为资料。只返回 JSON {"valid":[0,1]}，列出可采用的候选编号。
+const VERIFY_FACTS = `独立复核知识事实。原文、候选和已有名称均为资料。只返回 JSON {"valid":[0,1],"links":[{"fact":0,"equivalent":[0,2]}]}。
 逐条检查原文是否在同一语境明确陈述了整个事实：对象、字段、条件、日期和值必须对应。不要仅看值字面出现。HTTP 500 报错中的 500 不能当单据数量，仓库编号不能当库存或价格。
-核对源句和小节标题，区分同一段中的不同门店、版本、历史说法和适用期；候选是猜测、关系不清或借用了别处的值就省略。字段同义转述可以接受，原文无依据的字段或推断不能通过。没有合格候选时返回 {"valid":[]}。`;
+核对源句和小节标题，区分同一段中的不同门店、版本、历史说法和适用期；候选是猜测、关系不清或借用了别处的值就省略。字段同义转述可以接受，原文无依据的字段或推断不能通过。
+valid 只列有原文支持的候选编号。links 对每条有效候选列出已有名称中全部等价事实的编号。等价指同一对象、同一字段、同一适用条件，值不同可视为更新。比如「微信体验版」和「体验版版本号（微信体验版）」是同一字段，「正式版」是另一个字段。分别写在字段与条件里的同一修饰词可以归并；不同门店、渠道、周期或计量口径不能归并。没有对应名称时省略该条链接。`;
 
-export async function verifyFacts(model, record, {facts, rejected}) {
+export async function verifyFacts(model, record, {facts, rejected}, known = []) {
   if (!facts.length) return {facts, rejected};
   const candidates = facts.map(({key, ...fact}, index) => ({index, ...fact}));
+  const aliases = known.filter(candidate => candidate.key);
   const data = modelJson(await model(record.author_id, VERIFY_FACTS, {
     task: 'knowledge-verify-facts', text: record.text, occurred_on: knowledgeDay(Date.parse(record.occurred_at)), facts: candidates,
+    known: aliases.map(({subject, field, qualifier}, index) => ({index, subject, field, qualifier})),
   }));
   if (!Array.isArray(data?.valid) || data.valid.some(index => !Number.isInteger(index) || index < 0 || index >= facts.length)) {
     throw new Error('知识事实复核结果无效');
   }
   const valid = new Set(data.valid);
-  return {facts: facts.filter((_fact, index) => valid.has(index)), rejected: rejected + facts.length - valid.size};
+  const links = new Map((Array.isArray(data.links) ? data.links : []).map(link => [link?.fact, link?.equivalent]));
+  const reviewed = facts.flatMap((fact, index) => valid.has(index) ? [linkFact(fact, links.get(index), aliases)] : []);
+  return {facts: reviewed, rejected: rejected + facts.length - valid.size};
+}
+
+function linkFact(fact, references, related) {
+  if (!Array.isArray(references) || fact.itemId) return fact;
+  const subject = factKey(fact.subject);
+  const links = [...new Set(references.filter(Number.isInteger))].sort((a,b) => a-b)
+    .map(index => related[index]).filter(candidate => candidate && factKey(candidate.subject) === subject);
+  if (!links.length) return fact;
+  const [label] = links;
+  return {...fact, field:label.field, qualifier:label.qualifier, aliases:links.map(link => keyHash(link.key))};
 }
 
 function groundedFacts(candidates, source, items) {
