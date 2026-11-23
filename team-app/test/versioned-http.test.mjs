@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
+import {setTimeout as sleep} from 'node:timers/promises';
+import {mkdtemp, rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {Script} from 'node:vm';
 import {Store} from '../src/store.mjs';
 import {Auth} from '../src/auth.mjs';
@@ -8,8 +12,9 @@ import {Channels} from '../src/channels.mjs';
 import {createKnowledgeServer} from '../src/http.mjs';
 import {organizationPage} from '../src/organization-page.mjs';
 import {KnowledgeClient} from '../client/knowledge-client.mjs';
+import {run as knowledgeCli} from '../scripts/knowledge.mjs';
 
-async function fixture(t, model) {
+async function fixture(t, model, options) {
   const store = new Store(':memory:'), project = store.defaultProject(), auth = new Auth(store, project);
   const channels = new Channels(store, auth), org = auth.organization;
   const password = 'integration-password-123';
@@ -36,9 +41,9 @@ async function fixture(t, model) {
   t.after(()=>delete process.env.HTTP_TEST_BRIDGE_KEY);
   const app=channels.manage(owner.user,{action:'app',name:'胡叨叨微信',channel:'wecom',tenant_id:company.id,brand_id:brand.id,secret_env:'HTTP_TEST_BRIDGE_KEY',enabled:true});
   for (const a of [owner,staff,manager]) channels.manage(owner.user,{action:'binding',app_id:app.id,external_id:a.id,user_id:a.id,verified:true});
-  const server=createKnowledgeServer(store,model??(async (_system,input)=>JSON.stringify({action:'answer',answer:'盘点已完成。',quality:'supported',citations:[input.evidence[0].id]})),project);
+  const server=createKnowledgeServer(store,model??(async (_system,input)=>JSON.stringify({action:'answer',answer:'盘点已完成。',quality:'supported',citations:[input.evidence[0].id]})),project,options);
   server.listen(0,'127.0.0.1');await once(server,'listening');
-  t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();});
+  t.after(async()=>{await server.stopKnowledgeWorkers?.();await new Promise(resolve=>server.close(resolve));store.close();});
   const base='http://127.0.0.1:'+server.address().port;
   async function request(path,body,token=owner.token,scopeId) {
     const response=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(scopeId?{'X-Knowledge-Scope':scopeId}:{})},body:body===undefined?undefined:JSON.stringify(body)});
@@ -64,6 +69,67 @@ test('所有入口统一限制本店、管理层、品牌和公司，旧接口�
   for (const path of ['/api/admin','/api/v1/admin/organization','/api/v1/admin/channels']) assert.equal((await r(path,undefined,token)).status,403);
   const device=f.auth.start();assert.equal((await r('/api/auth/device-bind',{code:device.code},token)).status,401);
   assert.equal(f.auth.poll(device.device_token).status,'waiting');
+});
+
+async function waitFor(run, accept) {
+  for (let i = 0; i < 100; i++) {
+    const value = await run();
+    if (accept(value)) return value;
+    await sleep(70);
+  }
+  assert.fail('预期的知识更新未完成');
+}
+
+function knowledgeModel(_system, input) {
+  if (input.task === 'knowledge-facts') {
+    const value = /\d+:\d+/.exec(input.text)?.[0];
+    return JSON.stringify({facts: [{subject: '一店', field: '开门时间', value}]});
+  }
+  const time = /\d+:\d+/.exec(input.evidence[0]?.text)?.[0];
+  return time ? '现在是 ' + time + ' 开门。[1]' : '我还查不到。';
+}
+
+test('真实 HTTP 保存后，电脑检索、应用问答和自动 Wiki 同步采用最后入库的值', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'current-wiki-http-'));
+  const original = process.env.TEAM_WIKI_DIR;
+  process.env.TEAM_WIKI_DIR = directory;
+  const f = await fixture(t, knowledgeModel, {currentKnowledge: true});
+  t.after(async () => {
+    if (original === undefined) delete process.env.TEAM_WIKI_DIR;
+    else process.env.TEAM_WIKI_DIR = original;
+    await rm(directory, {recursive: true, force: true});
+  });
+  const scope = f.first.id, token = f.staff.token, question = '一店几点开门';
+  const wiki = () => f.request('/api/v1/wiki', {scope_id: scope, query: question}, token);
+  const older = await f.request('/api/v1/records',
+    {scope_id: scope, text: '一店开门时间 9:00', occurred_at: '2026-11-22', idempotency_key: 'v1-record'}, token);
+  assert.equal(older.status, 200);
+  await waitFor(wiki, result => result.data.pages.some(page => page.text.includes('9:00')));
+  const channel = await f.request('/api/v1/channels/' + f.app.id + '/bridge',
+    {external_id: f.staff.id}, process.env.HTTP_TEST_BRIDGE_KEY);
+  const sender = channel.data.token;
+  const conversation = await f.request('/api/v1/conversations', {scope_id: scope}, sender);
+  const messages = '/api/v1/conversations/' + conversation.data.id + '/messages';
+  const newer = await f.request(messages,
+    {intent: 'save', text: '一店开门时间 10:00', occurred_at: '2026-11-21', idempotency_key: 'app-record'}, sender);
+  const id = newer.data.result.record.id;
+  const expired = await wiki();
+  assert.deepEqual(expired.data.pages, []);
+  const search = () => f.request('/api/v1/search', {scope_id: scope, query: question}, token);
+  const found = await waitFor(search, result => result.data.results?.[0].coverage.status === 'current');
+  assert.deepEqual(found.data.results[0].records.map(row => row.id), [id]);
+  assert.match(found.data.results[0].records[0].text, /10:00/);
+  const cli = await knowledgeCli(['search-all', '--query', question, '--url', f.base],
+    {TEAM_KB_TOKEN: token}, {profile:async () => ({}), log:() => {}});
+  assert.equal(cli.results[0].records[0].id, id);
+  const answer = await f.request(messages, {intent: 'query', text: question, idempotency_key: 'check-hours'}, sender);
+  assert.equal(answer.data.result.answer, '现在是 10:00 开门。');
+  const page = await waitFor(wiki, result => result.data.pages.some(row => row.text.includes('10:00')));
+  assert.deepEqual(page.data.pages[0].sources.map(source => source.id), [id]);
+  assert.doesNotMatch(page.data.pages[0].text, /9:00/);
+  assert.equal((await f.request('/api/v1/wiki-source', undefined, token, f.second.id)).status, 403);
+  const record = await f.request('/api/v1/get-records', {scope_id: scope, ids: [older.data.id]}, token);
+  assert.equal(record.data.records[0].text, '一店开门时间 9:00');
 });
 
 test('真实 HTTP 与 SDK 完成保存、幂等重试、分页、引用问答、纠错和会话删除',async t=>{
