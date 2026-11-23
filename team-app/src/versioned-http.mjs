@@ -160,7 +160,12 @@ async function knowledgeRead({method, path, store, knowledge, user, scope, scope
   if (path === 'wiki-source') {
     return store.knowledge ? {mode:'current', wiki:currentWiki(store.knowledge, id)} : {mode:'legacy'};
   }
-  return {mode:store.knowledge ? 'current' : knowledge ? 'backfill' : 'legacy', updating:knowledge?.pending(id) ?? false};
+  return knowledgeStatus(store, knowledge, id);
+}
+
+function knowledgeStatus(store, knowledge, scope) {
+  return {mode:store.knowledge ? 'current' : knowledge ? 'backfill' : 'legacy',
+    updating:knowledge?.pending(scope) ?? false, rejected_facts:knowledge?.rejectedCount(scope) ?? 0};
 }
 
 async function scopedLookup(path, store, user, ids, input, chat, authorize) {

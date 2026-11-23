@@ -157,3 +157,31 @@ test('旧库回填保持原读法，开启生效读取会使旧答案的版本�
   setKnowledgeReadMode(store.db, true);
   assert.equal(epoch(), legacyEpoch + 1);
 });
+
+test('回填保留长文档中有原文依据的事实，并统计被拒绝的同批候选', async t => {
+  const f = openStore(t), {store, scope} = f;
+  const values = Array.from({length: 32}, (_, index) => '凭据以外的示例值 ' + (index + 101));
+  const record = add(f, values.join('\n'));
+  const facts = values.map((value, index) => ({subject: '营运流程', field: '说明 ' + (index + 1), value}));
+  store.knowledge = new CurrentKnowledge(store, {now:() => now});
+  const complete = await store.knowledge.runOnce(() => modelOutput([
+    ...facts, {subject:'营运流程', field:'说明 33', value:'原文中没有的内容'},
+    {subject:'营运流程', field:'说明 34', value:values[0], from:'2026-02-30'},
+  ]));
+  assert.equal(complete, 'processed');
+  assert.equal(store.knowledge.pending(scope), false);
+  const entries = store.knowledge.entries(scope);
+  assert.equal(entries.length, 32);
+  assert.ok(entries.every(entry => entry.id === record.id));
+  assert.equal(store.knowledge.rejectedCount(scope), 2);
+});
+
+test('提取候选全部无原文依据时仍待重试', async t => {
+  const f = openStore(t), {store, scope} = f;
+  add(f, '一店周六 9:00 开门');
+  store.knowledge = new CurrentKnowledge(store, {now:() => now});
+  const result = await store.knowledge.runOnce(() => modelOutput([hours('一店','开门时间','10:00')]));
+  assert.equal(result, 'retry');
+  assert.equal(store.knowledge.pending(scope), true);
+  assert.equal(store.knowledge.entries(scope).length, 0);
+});

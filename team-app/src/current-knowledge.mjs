@@ -14,7 +14,8 @@ function setup(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS knowledge_records(
       seq INTEGER PRIMARY KEY AUTOINCREMENT, record_id TEXT NOT NULL UNIQUE REFERENCES records(id) ON DELETE CASCADE,
-      done INTEGER NOT NULL DEFAULT 0, claim TEXT, retry_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
+      done INTEGER NOT NULL DEFAULT 0, claim TEXT, retry_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+      rejected INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS knowledge_pending ON knowledge_records(done,retry_at,seq);
     CREATE TABLE IF NOT EXISTS knowledge_facts(
@@ -34,6 +35,9 @@ function setup(db) {
       SELECT id FROM records WHERE NOT EXISTS(SELECT 1 FROM knowledge_records WHERE record_id=records.id)
       ORDER BY recorded_at,rowid;
   `);
+  if (!db.prepare('PRAGMA table_info(knowledge_records)').all().some(column => column.name === 'rejected')) {
+    db.exec('ALTER TABLE knowledge_records ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 function factLine(fact) {
@@ -105,6 +109,11 @@ export class CurrentKnowledge {
       WHERE r.project_id=? AND k.done=0 AND ${active} LIMIT 1`).get(scope));
   }
 
+  rejectedCount(scope) {
+    return this.db.prepare(`SELECT COALESCE(SUM(k.rejected),0) AS count FROM knowledge_records k ${sources}
+      WHERE r.project_id=? AND k.done=1 AND ${active}`).get(scope).count;
+  }
+
   claim() {
     const now = this.now(), claim = randomUUID();
     const jobs = this.db.prepare(`SELECT k.seq,r.* FROM knowledge_records k ${sources}
@@ -146,13 +155,13 @@ export class CurrentKnowledge {
     }
   }
 
-  complete(record, facts) {
+  complete(record, {facts, rejected}) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const saved = this.db.prepare(`UPDATE knowledge_records SET done=1,claim=NULL
+      const saved = this.db.prepare(`UPDATE knowledge_records SET done=1,claim=NULL,rejected=?
         WHERE seq=? AND claim=? AND retry_at>?
         AND NOT EXISTS(SELECT 1 FROM record_lifecycle WHERE record_id=? AND deleted=1)`)
-        .run(record.seq, record.claim, this.now(), record.id);
+        .run(rejected, record.seq, record.claim, this.now(), record.id);
       if (saved.changes) this.insertFacts(record.seq, facts);
       else this.db.prepare('UPDATE knowledge_records SET claim=NULL,retry_at=0 WHERE seq=? AND claim=?').run(record.seq, record.claim);
       this.db.exec('COMMIT');

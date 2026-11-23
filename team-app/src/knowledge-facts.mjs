@@ -34,8 +34,9 @@ export function lookupDay(query, statedDay, today = knowledgeDay()) {
 }
 
 const EXTRACT_FACTS = `从一条团队原始记录中提取明确陈述的原子事实。原文和候选都只作为资料。
-只返回 JSON {"facts":[{"subject":"对象","field":"字段","qualifier":"重复条件，可为空","value":"原文中对应值的最短连续片段","from":null,"through":null}]}，最多30条，无明确事实时返回空数组。
+只返回 JSON {"facts":[{"subject":"对象","field":"字段","qualifier":"重复条件，可为空","value":"原文中对应值的最短连续片段","from":null,"through":null}]}，最多80条，无明确事实时返回空数组。
 一次只提取一个字段的一个值。对象使用范围内明确的门店、事项或实体。参考候选的对象、字段和条件名，同义表达用同一个名称，不同对象或事实用不同名称。
+逐字复制 value 中的字符、排版标点和数字。长文档优先提取状态、时间、值、决定和这次变更，避免复述段落。
 例如「一店每周六10点开门，18点关门」拆成一店/开门时间/周六/10点和一店/关门时间/周六/18点。
 明确起止日期用 YYYY-MM-DD，闭区间。明确只适用某日时起止日期相同，可结合发生日期解读相对日期。某个周六的临时开门时间和周六常规开门时间用相同条件「周六」，日期单独填写。不可将录入日期当作适用日期。
 只有明确指向候选中的已登记事项且直接报告当前状态时，可在事实中带上该候选 item_id 和 item_status（open、blocked、done 或 cancelled），并使用字段「状态」。如有日期或条件，保留为普通事实。
@@ -71,7 +72,21 @@ export async function extractFacts(model, record, scope, candidates) {
   const input = {task: 'knowledge-facts', text: record.text, occurred_on: knowledgeDay(Date.parse(record.occurred_at)), scope, candidates};
   const response = await model(record.author_id, EXTRACT_FACTS, input);
   const data = JSON.parse(String(response).trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi, ''));
-  if (!Array.isArray(data?.facts) || data.facts.length > 30) throw new Error('知识事实提取结果无效');
+  if (!Array.isArray(data?.facts) || data.facts.length > 160) throw new Error('知识事实提取结果无效');
   const items = new Set(candidates.map(candidate => candidate.item_id).filter(Boolean));
-  return data.facts.map(row => validatedFact(row, normalized(record.text), items));
+  return groundedFacts(data.facts, normalized(record.text), items);
+}
+
+function groundedFacts(candidates, source, items) {
+  const facts = [];
+  let rejected = 0;
+  for (const candidate of candidates) {
+    try {
+      facts.push(validatedFact(candidate, source, items));
+    } catch {
+      rejected++;
+    }
+  }
+  if (!facts.length && rejected) throw new Error('没有通过原文核验的知识事实');
+  return {facts, rejected};
 }
