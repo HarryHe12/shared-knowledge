@@ -12,6 +12,8 @@ const now = Date.parse('2026-11-23T00:00:00Z');
 const hours = (subject, field, value, date = null) => ({subject, field, qualifier: '周六', value, from: date, through: date});
 const oldHours = [hours('一店', '开门时间', '9:00'), hours('一店', '关门时间', '18:00')];
 const modelOutput = facts => JSON.stringify({facts});
+const runReviewed = (knowledge, extract) => knowledge.runOnce((user, system, input) =>
+  input.task === 'knowledge-verify-facts' ? JSON.stringify({valid:input.facts.map(fact=>fact.index)}) : extract(user, system, input));
 
 function openStore(t) {
   const store = new Store(':memory:');
@@ -43,7 +45,7 @@ test('录入顺序决定生效事实，部分覆盖保留其余字段，门店�
   store.knowledge = new CurrentKnowledge(store, {now: () => now});
   assert.equal((await read(f)).coverage.status, 'updating');
   for (let count = 0; count < queue.size; count++) {
-    assert.equal(await store.knowledge.runOnce((_uid, _system, input) => modelOutput(queue.get(input.text))), 'processed');
+    assert.equal(await runReviewed(store.knowledge,(_uid, _system, input) => modelOutput(queue.get(input.text))), 'processed');
   }
   const result = await read(f);
   assert.equal(result.retrieval.as_of, '2026-11-28');
@@ -68,11 +70,11 @@ test('更正、撤回、恢复和彻底删除重新计算事实，重试保留�
   const latest = add(f, '一店周六开门 10:00', {idempotency: 'same-write'});
   assert.equal(add(f, latest.text, {idempotency: 'same-write'}).id, latest.id);
   const extractTime = (_uid, _system, {text}) => modelOutput([hours('一店', '开门时间', text.split(' ').at(-1))]);
-  assert.equal(await store.knowledge.runOnce(async () => { throw new Error('模型故障'); }), 'retry');
-  assert.equal(await store.knowledge.runOnce(extractTime), 'processed');
+  assert.equal(await runReviewed(store.knowledge,async () => { throw new Error('模型故障'); }), 'retry');
+  assert.equal(await runReviewed(store.knowledge,extractTime), 'processed');
   assert.equal((await read(f)).coverage.status, 'updating');
   store.knowledge.now = () => now + 3000;
-  assert.equal(await store.knowledge.runOnce(extractTime), 'processed');
+  assert.equal(await runReviewed(store.knowledge,extractTime), 'processed');
   assert.equal((await read(f)).records[0].id, latest.id);
   store.withdraw(user, scope, {id: latest.id, version: 1});
   assert.equal((await read(f)).records[0].id, older.id);
@@ -80,7 +82,7 @@ test('更正、撤回、恢复和彻底删除重新计算事实，重试保留�
   assert.equal((await read(f)).records[0].version, 3);
   store.correct(user, scope, {id: older.id, version: 1, text: '一店周六开门 10:30'});
   assert.equal((await read(f)).coverage.status, 'updating');
-  assert.equal(await store.knowledge.runOnce(extractTime), 'processed');
+  assert.equal(await runReviewed(store.knowledge,extractTime), 'processed');
   assert.equal((await read(f)).records[0].text, '一店 开门时间（周六） 10:30');
   assert.equal((await read(f)).records[0].version, 2);
   store.purge(user, scope, {id: older.id, version: 2});
@@ -98,9 +100,9 @@ test('已登记事项使用同一套录入顺序，事项详情仍引用提供�
   const reopened = add(f, '冷柜维修重新阻塞', {occurred_at: '2026-11-20'});
   store.knowledge = new CurrentKnowledge(store, {now: () => now});
   const noFacts = () => modelOutput([]);
-  await store.knowledge.runOnce(noFacts);
-  await store.knowledge.runOnce(noFacts);
-  await store.knowledge.runOnce((_uid, _system, {candidates}) => {
+  await runReviewed(store.knowledge,noFacts);
+  await runReviewed(store.knowledge,noFacts);
+  await runReviewed(store.knowledge,(_uid, _system, {candidates}) => {
     assert.ok(candidates.some(candidate => candidate.item_id === item.id));
     return modelOutput([{subject: item.title, field: '状态', value: '重新阻塞', item_id: item.id, item_status: 'blocked'}]);
   });
@@ -125,10 +127,10 @@ test('并行处理、进程重开和更正发生在提取期间时，旧任务�
   second.knowledge = new CurrentKnowledge(second, {now: () => now});
   const original = add({store, user, scope}, '一店 9:00');
   let finishFirst;
-  const previousRun = store.knowledge.runOnce(() => new Promise(resolve => {finishFirst = resolve;}));
-  assert.equal(await second.knowledge.runOnce(() => assert.fail('同一任务不可被同时领取')), 'idle');
+  const previousRun = runReviewed(store.knowledge,() => new Promise(resolve => {finishFirst = resolve;}));
+  assert.equal(await runReviewed(second.knowledge,() => assert.fail('同一任务不可被同时领取')), 'idle');
   second.correct(user, scope, {id: original.id, version: 1, text: '一店 10:00'});
-  await second.knowledge.runOnce(() => modelOutput([hours('一店', '开门时间', '10:00')]));
+  await runReviewed(second.knowledge,() => modelOutput([hours('一店', '开门时间', '10:00')]));
   finishFirst(modelOutput([hours('一店', '开门时间', '9:00')]));
   await previousRun;
   const result = await read({store, user, scope});
@@ -145,8 +147,8 @@ test('旧库回填保持原读法，开启生效读取会使旧答案的版本�
   const backfill = new CurrentKnowledge(store, {now:() => now, serving:false});
   assert.equal((await read(f)).records.length, 2);
   const model = (_uid, _system, {text}) => modelOutput([hours('一店', '开门时间', text.split(' ').at(-1))]);
-  await backfill.runOnce(model);
-  await backfill.runOnce(model);
+  await runReviewed(backfill,model);
+  await runReviewed(backfill,model);
   assert.equal(epoch(), legacyEpoch);
   assert.equal(backfill.pending(scope), false);
   assert.equal((await read(f)).records.length, 2);
@@ -164,7 +166,7 @@ test('回填保留长文档中有原文依据的事实，并统计被拒绝的�
   const record = add(f, values.join('\n'));
   const facts = values.map((value, index) => ({subject: '营运流程', field: '说明 ' + (index + 1), value}));
   store.knowledge = new CurrentKnowledge(store, {now:() => now});
-  const complete = await store.knowledge.runOnce(() => modelOutput([
+  const complete = await runReviewed(store.knowledge,() => modelOutput([
     ...facts, {subject:'营运流程', field:'说明 33', value:'原文中没有的内容'},
     {subject:'营运流程', field:'说明 34', value:values[0], from:'2026-02-30'},
   ]));
@@ -180,8 +182,46 @@ test('提取候选全部无原文依据时仍待重试', async t => {
   const f = openStore(t), {store, scope} = f;
   add(f, '一店周六 9:00 开门');
   store.knowledge = new CurrentKnowledge(store, {now:() => now});
-  const result = await store.knowledge.runOnce(() => modelOutput([hours('一店','开门时间','10:00')]));
+  const result = await runReviewed(store.knowledge,() => modelOutput([hours('一店','开门时间','10:00')]));
   assert.equal(result, 'retry');
   assert.equal(store.knowledge.pending(scope), true);
   assert.equal(store.knowledge.entries(scope).length, 0);
+});
+
+test('同一个数字描述不同的事情时，语义复核保留原来的生效事实', async t => {
+  const f = openStore(t), {store, scope} = f;
+  const older = add(f, '甲店有 110 张待审核进货单。');
+  add(f, '甲店处理了 HTTP 500 报错。');
+  store.knowledge = new CurrentKnowledge(store, {now:() => now});
+  const provider = (_uid, _system, input) => {
+    if (input.task === 'knowledge-verify-facts') {
+      return JSON.stringify({valid:input.text.includes('待审核进货单') ? [0] : []});
+    }
+    const value = /\d+/.exec(input.text)[0];
+    return modelOutput([{subject:'甲店',field:'待审核进货单数',value}]);
+  };
+  await store.knowledge.runOnce(provider);
+  await store.knowledge.runOnce(provider);
+  const found = await read(f, '甲店待审核进货单数');
+  assert.deepEqual(found.records.map(row=>row.id),[older.id]);
+  assert.match(found.records[0].text,/110/);
+  assert.doesNotMatch(currentWiki(store.knowledge,scope).pages[0].text,/500/);
+  assert.equal(store.knowledge.rejectedCount(scope),1);
+});
+
+test('升级让已提取的旧事实待复核，原文与入库顺序保留', async t => {
+  const f = openStore(t), {store, scope} = f;
+  const old = add(f, '一店周六 9:00 开门');
+  store.knowledge = new CurrentKnowledge(store, {now:() => now});
+  assert.equal(await runReviewed(store.knowledge,() => modelOutput([hours('一店','开门时间','9:00')])), 'processed');
+  store.db.exec('ALTER TABLE knowledge_records DROP COLUMN review_only');
+  store.knowledge = new CurrentKnowledge(store, {now:() => now});
+  assert.equal(store.knowledge.pending(scope),true);
+  assert.deepEqual(store.knowledge.entries(scope),[]);
+  assert.equal(await store.knowledge.runOnce((_uid,_system,input) => {
+    assert.equal(input.task,'knowledge-verify-facts');
+    assert.equal(input.facts[0].value,'9:00');
+    return JSON.stringify({valid:[0]});
+  }), 'processed');
+  assert.equal((await read(f)).records[0].id,old.id);
 });

@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {extractFacts, factKey, knowledgeDay, lookupDay, STATUS_LABELS} from './knowledge-facts.mjs';
+import {extractFacts, factKey, knowledgeDay, lookupDay, STATUS_LABELS, verifyFacts} from './knowledge-facts.mjs';
 import {terms} from './store.mjs';
 import {retrieve} from './retrieval.mjs';
 import {anchoredLookup} from './query-policy.mjs';
@@ -15,7 +15,7 @@ function setup(db) {
     CREATE TABLE IF NOT EXISTS knowledge_records(
       seq INTEGER PRIMARY KEY AUTOINCREMENT, record_id TEXT NOT NULL UNIQUE REFERENCES records(id) ON DELETE CASCADE,
       done INTEGER NOT NULL DEFAULT 0, claim TEXT, retry_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
-      rejected INTEGER NOT NULL DEFAULT 0
+      rejected INTEGER NOT NULL DEFAULT 0, review_only INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS knowledge_pending ON knowledge_records(done,retry_at,seq);
     CREATE TABLE IF NOT EXISTS knowledge_facts(
@@ -37,6 +37,22 @@ function setup(db) {
   `);
   if (!db.prepare('PRAGMA table_info(knowledge_records)').all().some(column => column.name === 'rejected')) {
     db.exec('ALTER TABLE knowledge_records ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0');
+  }
+  addReviewState(db);
+}
+
+function addReviewState(db) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!db.prepare('PRAGMA table_info(knowledge_records)').all().some(column => column.name === 'review_only')) {
+      db.exec(`ALTER TABLE knowledge_records ADD COLUMN review_only INTEGER NOT NULL DEFAULT 0;
+        UPDATE knowledge_records SET done=0,review_only=1,claim=NULL,retry_at=0
+        WHERE done=1 AND EXISTS(SELECT 1 FROM knowledge_facts WHERE seq=knowledge_records.seq)`);
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
   }
 }
 
@@ -116,7 +132,7 @@ export class CurrentKnowledge {
 
   claim() {
     const now = this.now(), claim = randomUUID();
-    const jobs = this.db.prepare(`SELECT k.seq,r.* FROM knowledge_records k ${sources}
+    const jobs = this.db.prepare(`SELECT k.seq,k.review_only,k.rejected,r.* FROM knowledge_records k ${sources}
       WHERE k.done=0 AND k.retry_at<=? AND ${active} ORDER BY k.seq`).iterate(now);
     for (const record of jobs) {
       if (!this.isActive(record.project_id)) continue;
@@ -132,7 +148,7 @@ export class CurrentKnowledge {
     items.sort((a, b) => Number(record.text.includes(b.title)) - Number(record.text.includes(a.title)));
     const facts = this.db.prepare(`SELECT DISTINCT subject,field,qualifier FROM knowledge_facts f
       JOIN knowledge_records k USING(seq) ${sources}
-      WHERE r.project_id=? AND ${active} ORDER BY f.seq DESC LIMIT 250`).all(record.project_id);
+      WHERE r.project_id=? AND k.done=1 AND ${active} ORDER BY f.seq DESC LIMIT 250`).all(record.project_id);
     const words = new Set(terms(record.text));
     const score = row => terms(row.subject + ' ' + row.field).filter(word => words.has(word)).length;
     facts.sort((a, b) => score(b) - score(a));
@@ -143,8 +159,7 @@ export class CurrentKnowledge {
     const record = this.claim();
     if (!record) return 'idle';
     try {
-      const name = this.db.prepare('SELECT name FROM projects WHERE id=?').get(record.project_id).name;
-      const facts = await extractFacts(model, record, name, this.columns(record));
+      const facts = await this.reviewRecord(model, record);
       if (!this.isActive(record.project_id)) throw new Error('知识范围已停用');
       this.complete(record, facts);
       return 'processed';
@@ -155,10 +170,21 @@ export class CurrentKnowledge {
     }
   }
 
+  async reviewRecord(model, record) {
+    if (record.review_only) {
+      const facts = this.db.prepare(`SELECT key,subject,field,qualifier,value,starts_on AS "from",ends_on AS "through",
+        item_id AS itemId,status FROM knowledge_facts WHERE seq=? ORDER BY ordinal`).all(record.seq);
+      return verifyFacts(model, record, {facts, rejected: record.rejected});
+    }
+    const name = this.db.prepare('SELECT name FROM projects WHERE id=?').get(record.project_id).name;
+    const extracted = await extractFacts(model, record, name, this.columns(record));
+    return verifyFacts(model, record, extracted);
+  }
+
   complete(record, {facts, rejected}) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const saved = this.db.prepare(`UPDATE knowledge_records SET done=1,claim=NULL,rejected=?
+      const saved = this.db.prepare(`UPDATE knowledge_records SET done=1,claim=NULL,review_only=0,rejected=?
         WHERE seq=? AND claim=? AND retry_at>?
         AND NOT EXISTS(SELECT 1 FROM record_lifecycle WHERE record_id=? AND deleted=1)`)
         .run(rejected, record.seq, record.claim, this.now(), record.id);
@@ -172,6 +198,7 @@ export class CurrentKnowledge {
   }
 
   insertFacts(seq, facts) {
+    this.db.prepare('DELETE FROM knowledge_facts WHERE seq=?').run(seq);
     const insert = this.db.prepare('INSERT INTO knowledge_facts VALUES(?,?,?,?,?,?,?,?,?,?,?)');
     facts.forEach((fact, index) => insert.run(seq, index, fact.key, fact.subject, fact.field, fact.qualifier,
       fact.value, fact.from, fact.through, fact.itemId, fact.status));
@@ -194,7 +221,7 @@ export class CurrentKnowledge {
           (SELECT d.record_id FROM details d WHERE d.id=i.id AND d.seq<=k.seq ORDER BY d.seq DESC LIMIT 1)
         FROM knowledge_facts f JOIN knowledge_records k USING(seq) ${sources}
         JOIN items i ON i.id=f.item_id AND i.project_id=r.project_id
-        WHERE i.project_id=? AND ${active}
+        WHERE i.project_id=? AND k.done=1 AND ${active}
       ), latest AS (
         SELECT *, ROW_NUMBER() OVER(PARTITION BY id ORDER BY seq DESC,structured DESC) AS rank FROM candidates
       )
@@ -208,7 +235,7 @@ export class CurrentKnowledge {
       WITH latest AS (
         SELECT f.*,k.record_id,ROW_NUMBER() OVER(PARTITION BY f.key ORDER BY f.seq DESC,f.ordinal DESC) AS rank
         FROM knowledge_facts f JOIN knowledge_records k USING(seq) ${sources}
-        WHERE r.project_id=? AND ${active} AND f.item_id IS NULL
+        WHERE r.project_id=? AND k.done=1 AND ${active} AND f.item_id IS NULL
         AND (f.starts_on IS NULL OR f.starts_on<=?) AND (f.ends_on IS NULL OR f.ends_on>=?)
       )
       SELECT * FROM latest WHERE rank=1 ORDER BY key

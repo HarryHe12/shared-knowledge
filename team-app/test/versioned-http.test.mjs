@@ -81,6 +81,7 @@ async function waitFor(run, accept) {
 }
 
 function knowledgeModel(_system, input) {
+  if (input.task === 'knowledge-verify-facts') return JSON.stringify({valid:input.facts.map(fact=>fact.index)});
   if (input.task === 'knowledge-facts') {
     const value = /\d+:\d+/.exec(input.text)?.[0];
     return JSON.stringify({facts: [{subject: '一店', field: '开门时间', value}]});
