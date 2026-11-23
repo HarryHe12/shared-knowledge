@@ -225,3 +225,29 @@ test('升级让已提取的旧事实待复核，原文与入库顺序保留', as
   }), 'processed');
   assert.equal((await read(f)).records[0].id,old.id);
 });
+
+test('同义字段经复核归并，最新值替换已有叫法下的旧值', async t => {
+  const f = openStore(t), {store, scope, user} = f;
+  const first = add(f,'甲应用微信体验版是 1.0。');
+  const beta = add(f,'甲应用微信体验版版本号是 1.1。');
+  const other = add(f,'甲应用微信正式版是 1.0。');
+  store.knowledge = new CurrentKnowledge(store,{now:() => now});
+  const version = (field,qualifier,value) => ({subject:'甲应用',field,qualifier,value});
+  await runReviewed(store.knowledge,() => modelOutput([version('微信体验版','','1.0')]));
+  await runReviewed(store.knowledge,() => modelOutput([version('体验版版本号','微信体验版','1.1')]));
+  await runReviewed(store.knowledge,() => modelOutput([version('微信正式版','','1.0')]));
+  const newest = add(f,'甲应用当前的微信体验版是 1.2。');
+  assert.equal(await store.knowledge.runOnce((_uid,_system,input) => {
+    if(input.task === 'knowledge-facts')return modelOutput([version('微信体验版版本','','1.2')]);
+    const equivalent = input.known.filter(row => row.field.includes('体验版')).map(row => row.index);
+    assert.equal(equivalent.length,2);
+    return JSON.stringify({valid:[0],links:[{fact:0,equivalent}]});
+  }),'processed');
+  const rows = (await read(f,'甲应用微信体验版')).records;
+  assert.ok(rows.some(r=>r.id===newest.id && r.text.endsWith('1.2')));
+  assert.ok(rows.some(r=>r.id===other.id),'正式版仍有效');
+  assert.ok(!rows.some(r=>[first.id,beta.id].includes(r.id)),'同义字段的两个旧值均退出');
+  assert.match(currentWiki(store.knowledge,scope).pages[0].text,/体验版.*1\.2/);
+  store.withdraw(user,scope,{id:newest.id,version:1});
+  assert.ok((await read(f,'甲应用微信体验版')).records.some(row=>row.id===beta.id));
+});
