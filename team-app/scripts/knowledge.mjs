@@ -24,6 +24,19 @@ function pickDefaultScope(scopes = []) {
   ?? active[0] ?? null;
 }
 
+async function lookupAcrossScopes(command, v1, activeScope, values, query) {
+  if (command === 'wiki' && values.scope) return v1('wiki', {scope_ids:[values.scope], query});
+  const me = await v1('me');
+  const allScopes = me.scopes ?? [];
+  const preferredTenant = allScopes.find(scope => scope.id === activeScope)?.tenant_id ?? primaryTenantId(allScopes);
+  const companyScopes = preferredTenant ? allScopes.filter(scope => scope.tenant_id === preferredTenant) : [];
+  const scopeIds = (companyScopes.length ? companyScopes : allScopes.slice(0, 1)).map(scope => scope.id).slice(0, 40);
+  if (!scopeIds.length) throw new Error('当前账号尚未开通任何知识范围');
+  if (command === 'wiki') return v1('wiki', {scope_ids:scopeIds, query});
+  return v1('search', {scope_ids:scopeIds, query, ...(values.limit ? {limit:Number(values.limit)} : {}),
+    ...(values.depth ? {depth:Number(values.depth)} : {}), ...(values.strategy ? {strategy:values.strategy} : {})});
+}
+
 export async function run(args=process.argv.slice(2),env=process.env,deps={}){
  const fetchImpl=deps.fetch??globalThis.fetch;
  const cred=deps.credential??credential;
@@ -37,7 +50,7 @@ export async function run(args=process.argv.slice(2),env=process.env,deps={}){
   'clarification-id':{type:'string'},item:{type:'string'},'changes-file':{type:'string'},'occurred-at':{type:'string'},idempotency:{type:'string'},wait:{type:'boolean'},all:{type:'boolean'},
  }});
  const [command]=positionals;
- if(!command||command==='help'){log('knowledge.mjs login [--url URL] [--wait]|whoami|use-scope --scope ID|logout|search-all --query TEXT [--limit 15]|chat-save (--text TEXT|--file FILE) [--idempotency KEY]|records|items|snapshot|timeline --item ID|save (--file FILE|--text TEXT) [--changes-file FILE] [--idempotency KEY]|extract (--file FILE|--text TEXT)|search --query TEXT [--all] [--strategy hybrid|exact] [--limit 15] [--depth 1]|get --ids ID,ID|state|history --id ID|correct --id ID --version N (--file FILE|--text TEXT) [--changes-file FILE]|withdraw|restore|purge --id ID --version N');return;}
+ if(!command||command==='help'){log('knowledge.mjs login [--url URL] [--wait]|whoami|use-scope --scope ID|logout|search-all --query TEXT [--limit 15]|wiki --query TEXT [--scope ID]|chat-save (--text TEXT|--file FILE) [--idempotency KEY]|records|items|snapshot|timeline --item ID|save (--file FILE|--text TEXT) [--changes-file FILE] [--idempotency KEY]|extract (--file FILE|--text TEXT)|search --query TEXT [--all] [--strategy hybrid|exact] [--limit 15] [--depth 1]|get --ids ID,ID|state|history --id ID|correct --id ID --version N (--file FILE|--text TEXT) [--changes-file FILE]|withdraw|restore|purge --id ID --version N');return;}
  const saved=await readProfile();
  const url=new URL(values.url??env.TEAM_KB_URL??saved.url??'http://127.0.0.1:5181');
  if(url.username||url.password)throw new Error('服务地址不可包含凭证');
@@ -110,14 +123,8 @@ export async function run(args=process.argv.slice(2),env=process.env,deps={}){
   return readFile(required('file'),'utf8');
  };
  let result;
- if(command==='search-all'||(command==='search'&&values.all)){
-  const me=await v1('me');
-  const allScopes=me.scopes??[];
-  const preferredTenant=allScopes.find(s=>s.id===activeScope)?.tenant_id??primaryTenantId(allScopes);
-  const companyScopes=preferredTenant?allScopes.filter(s=>s.tenant_id===preferredTenant):[];
-  const scopeIds=(companyScopes.length?companyScopes:allScopes.slice(0,1)).map(s=>s.id).slice(0,40);
-  if(!scopeIds.length)throw new Error('当前账号尚未开通任何知识范围');
-  result=await v1('search',{scope_ids:scopeIds,query:required('query'),...(values.limit?{limit:Number(values.limit)}:{}),...(values.depth?{depth:Number(values.depth)}:{}),...(values.strategy?{strategy:values.strategy}:{})});
+ if(command==='wiki'||command==='search-all'||(command==='search'&&values.all)){
+  result=await lookupAcrossScopes(command, v1, activeScope, values, required('query'));
  }else if(command==='chat-save'){
   const text=await readBodyText();
   const me=await v1('me');

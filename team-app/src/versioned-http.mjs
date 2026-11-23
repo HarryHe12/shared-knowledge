@@ -1,3 +1,4 @@
+import {lookupWiki} from './wiki.mjs';
 import {searchRecords, getRecords, getState} from './evidence.mjs';
 import {extractDraft} from './extract-draft.mjs';
 
@@ -112,16 +113,8 @@ export async function versionedHttp({req, url, input, send, store, model, auth, 
     result = chat.request(user, id, requestId, context);
   } else if (/^conversations\/[^/]+\/delete$/.test(path) && method === 'POST') {
     result = chat.remove(user, path.split('/')[1], context);
-  } else if (path === 'search' && method === 'POST') {
-    const ids = scopeIds();
-    const totalLimit = integer(input.limit, 15, 40);
-    const limit = Math.max(1, Math.floor(totalLimit / ids.length));
-    const epoch = chat.epoch();
-    const results = [];
-    for (const id of ids) results.push(await searchRecords(store, user, id, {...input, limit}));
-    ids.forEach(id => authorize(id));
-    if (chat.epoch() !== epoch) throw fail('检索期间资料或权限发生变化，请重新查询', 409);
-    result = {results, coverage: {scope_ids: ids, exhaustive: false, per_scope_limit: limit}};
+  } else if (['search', 'wiki'].includes(path) && method === 'POST') {
+    result = await scopedLookup(path, store, user, scopeIds(), input, chat, authorize);
   } else if (path === 'state' && ['GET', 'POST'].includes(method)) {
     const ids = method === 'POST' ? scopeIds() : [scope()];
     const results = ids.map(id => { authorize(id); return {scope_id: id, ...getState(store, user, id)}; });
@@ -153,4 +146,30 @@ export async function versionedHttp({req, url, input, send, store, model, auth, 
   if (result === undefined) throw fail('未找到接口', 404);
   send(200, result);
   return true;
+}
+
+async function scopedLookup(path, store, user, ids, input, chat, authorize) {
+  const epoch = chat.epoch();
+  const result = path === 'wiki'
+    ? await wikiResults(store, user, ids, input.query)
+    : await searchResults(store, user, ids, input);
+  ids.forEach(id => authorize(id));
+  if (chat.epoch() !== epoch) throw fail('检索期间资料或权限发生变化，请重新查询', 409);
+  return result;
+}
+
+async function searchResults(store, user, ids, input) {
+  const totalLimit = integer(input.limit, 15, 40);
+  const limit = Math.max(1, Math.floor(totalLimit / ids.length));
+  const results = [];
+  for (const id of ids) results.push(await searchRecords(store, user, id, {...input, limit}));
+  return {results, coverage: {scope_ids: ids, exhaustive: false, per_scope_limit: limit}};
+}
+
+async function wikiResults(store, user, ids, query) {
+  if (typeof query !== 'string' || !query.trim() || query.length > 2000) throw fail('查询须为1—2000字符');
+  const pages = await lookupWiki(store, user, ids, query);
+  return {pages: pages.map(({title, text, sources}) => ({
+    title, text, sources: sources.map(({id, project_id, version}) => ({id, project_id, version})),
+  }))};
 }

@@ -185,6 +185,7 @@ const response = await kb.sendMessage(conversation.id, {
 | `GET conversations/:id/requests/:request` | 查询持久请求状态 |
 | `POST conversations/:id/delete` | 删除对话、请求及消息，保留已入库来源 |
 | `POST search` / `POST state` | 证据检索 / 已确认事项状态 |
+| `POST wiki` | 在获准范围内补查 Wiki，返回页面及原文版本 |
 | `GET/POST records` | SQL 游标分页读取 / 幂等保存 |
 | `POST get-records` / `POST extract` | 展开有效来源 / 待确认事项草稿 |
 | `POST correct/withdraw/restore/purge` | 作者纠错、撤回、恢复、彻底删除 |
@@ -223,6 +224,12 @@ const response = await kb.sendMessage(conversation.id, {
 保存消息引用原记录，不另复制正文；更正后显示新版本，撤回/删除后不再显示正文。回答在资料或权限版本变化后失效，生命周期操作同步清理活动库内旧派生答案。提问文本保留到个人删除对话；失败/待处理请求可能暂存输入供恢复。收件箱完成/终止时清正文和答复，保留去重元数据。未实现按期限自动清理和批量个人数据导出。
 
 数据库默认 `team-app/.data/team.sqlite`；已有唯一 SQLite 文件沿用，多文件要求 `TEAM_DB`，相对路径以 team-app 为基准。默认项目固定，多旧项目先设 `TEAM_DEFAULT_PROJECT_ID`。升级使用增量建表，不自动合并旧作者。上线前停服务，备份内核库、collector 收件箱及环境配置，并演练恢复；不要在线只拷主 SQLite 文件而遗漏 WAL。
+
+### Wiki 补查
+
+聊天先匹配原始记录。对于缺少全部或部分证据的问题，有匹配且来源版本有效的整理稿时再补查 Wiki。电脑 Agent 可用 `node team-app/scripts/knowledge.mjs wiki --query '入职流程'`，指定单范围时加 `--scope ID`。整理稿用于定位和补充原文，引用它时附带对应的原文记录。
+
+在知识服务和编译器上配置同一个私有绝对目录 `TEAM_WIKI_DIR`。沿用旧编译器的 `KB_URL`、`KB_SERVICE_TOKEN`、`KB_SERVICE_SCOPE` 和 `KB_LLM_*` 配置，运行 `node kb-system/librarian/scripts/compile.mjs`。一次编译一个员工身份获准读取的范围，生成的内容对该范围内获准读取的员工可用。Wiki 目录只交给服务和编译进程，避免被静态发布。原文有增删或更正时，旧快照立即退出查询，重新编译后替换磁盘上的旧稿。可由现有调度器为每个范围定时运行。单范围来源超过编译输入上限会报告失败。
 
 旧平面 Wiki/静态摘要默认停用，即使开启 `KB_ENABLE_LEGACY_EXPORT=1` 也拒绝公司权限范围。旧导出文件需单独管理，不能发布；计数游标、增量覆盖和删除依赖尚未重构，不能当受控公司事实来源。
 

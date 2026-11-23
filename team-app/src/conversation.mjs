@@ -77,6 +77,12 @@ export function renderAnswerPrompt(input) {
       + (item.owner ? `，跟进人 ${item.owner}` : '') + (item.deadline ? `，截止 ${item.deadline}` : '')).join('\n'));
   }
   if (input.coverage?.context_truncated) parts.push('（相关内容较多，这里只列了最相关的一部分。）');
+  for (const page of input.wiki ?? []) {
+    const indices = page.source_ids.map(id => evidence.findIndex(row => row.id === id) + 1);
+    if (indices.every(Boolean)) {
+      parts.push(`Wiki 整理稿《${page.title}》，对应原文编号 ${indices.join('、')}：\n${page.text}`);
+    }
+  }
   parts.push(`同事现在问：${input.question}`);
   return parts.join('\n\n');
 }
@@ -133,4 +139,43 @@ export function recentHistory(db, conversationId, limit = MAX_HISTORY_TURNS * 2)
     if (!result?.answer || result.kind === 'stale') return [];
     return [{role: 'assistant', text: result.answer}];
   });
+}
+
+export async function answerWithFallback(model, input, evidence, lookup, maxEvidence, reference) {
+  const system = lookup ? ANSWER_SYSTEM +
+    '\n团队问题若完全或部分缺少证据，在回答末尾单独写 [WIKI_NEEDED]，以便系统补查。' : ANSWER_SYSTEM;
+  let parsed;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      parsed = parseAnswer(await model(system, input), input.evidence);
+      break;
+    } catch (error) {
+      if (error.status || attempt >= 1) throw error;
+    }
+  }
+  const needsWiki = parsed.quality === 'insufficient' || /\[WIKI_NEEDED\]\s*$/.test(parsed.answer);
+  if (lookup && (needsWiki || evidence.length === 0)) {
+    const pages = await lookup();
+    if (pages.length) return answerWithWiki(model, input, evidence, pages, maxEvidence, reference);
+  }
+  parsed.answer = parsed.answer.replace(/\[WIKI_NEEDED\]\s*$/, '').trim();
+  const status = needsWiki ? 'insufficient' : 'answered';
+  return {status, answer: parsed.answer, citations: evidence.filter(row => parsed.citations.includes(row.id)), coverage: input.coverage};
+}
+
+
+async function answerWithWiki(model, input, original, pages, maxEvidence, reference) {
+  const sources = pages.flatMap(page => page.sources);
+  const rows = [...new Map([...sources, ...original].map(row => [row.id, row])).values()].slice(0, maxEvidence);
+  const evidence = rows.map(row => ({...reference(row), text: row.text, scope_name: row.scope_name}));
+  const wiki = pages.map(page => ({
+    title: page.title,
+    text: page.text.slice(0, 4000),
+    source_ids: page.sources.map(row => row.id),
+  }));
+  const coverage = {...input.coverage, evidence_records: evidence.length, wiki_checked: true};
+  const system = ANSWER_SYSTEM + '\n用 Wiki 整理稿补齐缺口，提到采用的 Wiki 标题并引用对应原文编号。整理稿与原文冲突时说明冲突。';
+  const parsed = parseAnswer(await model(system, {...input, wiki, evidence, coverage}), evidence);
+  const status = parsed.quality === 'supported' ? 'answered' : 'insufficient';
+  return {status, answer: parsed.answer, citations: rows.filter(row => parsed.citations.includes(row.id)), coverage};
 }

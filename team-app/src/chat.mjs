@@ -1,7 +1,8 @@
+import {lookupWiki} from './wiki.mjs';
 import {randomUUID, createHash} from 'node:crypto';
 import {searchRecords, getState} from './evidence.mjs';
 import {suggestScope, matchScope} from './scope-suggest.mjs';
-import {ANSWER_SYSTEM, parseAnswer, recentHistory} from './conversation.mjs';
+import {answerWithFallback, parseAnswer, recentHistory} from './conversation.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -516,17 +517,8 @@ export class ChatService {
       evidence_records: evidence.length, context_truncated: groups.reduce((count, group) => count + group.length, 0) > evidence.length};
     const input = {format: 'chat', question, today: shanghaiDay(), asker: user.name, history, scopes, items: allItems,
       evidence: evidence.map(row => ({...reference(row), text: row.text, ...(row.scope_name ? {scope_name: row.scope_name} : {})})), coverage};
-    let parsed;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        parsed = parseAnswer(await model(ANSWER_SYSTEM, input), input.evidence);
-        break;
-      } catch (error) {
-        if (error.status || attempt >= 1) throw error;
-      }
-    }
-    const status = parsed.quality === 'insufficient' ? 'insufficient' : 'answered';
-    return {status, answer: parsed.answer, citations: evidence.filter(row => parsed.citations.includes(row.id)), coverage};
+    return answerWithFallback(model, input, evidence, process.env.TEAM_WIKI_DIR
+      ? () => lookupWiki(view, user, conversation.scope_ids, question) : null, MAX_EVIDENCE, reference);
   }
 
   remove(user, id, context = {}) {
