@@ -33,8 +33,13 @@ async function lookupAcrossScopes(command, v1, activeScope, values, query) {
   const scopeIds = (companyScopes.length ? companyScopes : allScopes.slice(0, 1)).map(scope => scope.id).slice(0, 40);
   if (!scopeIds.length) throw new Error('当前账号尚未开通任何知识范围');
   if (command === 'wiki') return v1('wiki', {scope_ids:scopeIds, query});
-  return v1('search', {scope_ids:scopeIds, query, ...(values.limit ? {limit:Number(values.limit)} : {}),
-    ...(values.depth ? {depth:Number(values.depth)} : {}), ...(values.strategy ? {strategy:values.strategy} : {})});
+  return v1('search', {scope_ids:scopeIds, ...searchParams(values, query)});
+}
+
+function searchParams(values, query) {
+  return {query, ...(values.limit ? {limit:Number(values.limit)} : {}),
+    ...(values.depth ? {depth:Number(values.depth)} : {}), ...(values.strategy ? {strategy:values.strategy} : {}),
+    ...(values['as-of'] ? {as_of:values['as-of']} : {})};
 }
 
 export async function run(args=process.argv.slice(2),env=process.env,deps={}){
@@ -47,7 +52,7 @@ export async function run(args=process.argv.slice(2),env=process.env,deps={}){
  const platform=deps.platform??process.platform;
  const {values,positionals}=parseArgs({args,allowPositionals:true,options:{
   scope:{type:'string'},id:{type:'string'},version:{type:'string'},query:{type:'string'},ids:{type:'string'},limit:{type:'string'},depth:{type:'string'},strategy:{type:'string'},url:{type:'string'},'token-file':{type:'string'},file:{type:'string'},text:{type:'string'},question:{type:'string'},reply:{type:'string'},
-  'clarification-id':{type:'string'},item:{type:'string'},'changes-file':{type:'string'},'occurred-at':{type:'string'},idempotency:{type:'string'},wait:{type:'boolean'},all:{type:'boolean'},
+  'clarification-id':{type:'string'},item:{type:'string'},'changes-file':{type:'string'},'occurred-at':{type:'string'},'as-of':{type:'string'},idempotency:{type:'string'},wait:{type:'boolean'},all:{type:'boolean'},
  }});
  const [command]=positionals;
  if(!command||command==='help'){log('knowledge.mjs login [--url URL] [--wait]|whoami|use-scope --scope ID|logout|search-all --query TEXT [--limit 15]|wiki --query TEXT [--scope ID]|chat-save (--text TEXT|--file FILE) [--idempotency KEY]|records|items|snapshot|timeline --item ID|save (--file FILE|--text TEXT) [--changes-file FILE] [--idempotency KEY]|extract (--file FILE|--text TEXT)|search --query TEXT [--all] [--strategy hybrid|exact] [--limit 15] [--depth 1]|get --ids ID,ID|state|history --id ID|correct --id ID --version N (--file FILE|--text TEXT) [--changes-file FILE]|withdraw|restore|purge --id ID --version N');return;}
@@ -152,7 +157,7 @@ export async function run(args=process.argv.slice(2),env=process.env,deps={}){
    result=await v1('conversations/'+encodeURIComponent(convId)+'/messages',payload);
   }
  }else if(command==='snapshot')result={records:await request('records'),items:await request('items')};
- else if(command==='search')result=await request('search',{query:required('query'),...(values.limit?{limit:Number(values.limit)}:{}),...(values.depth?{depth:Number(values.depth)}:{}),...(values.strategy?{strategy:values.strategy}:{})});
+ else if(command==='search')result=await request('search',searchParams(values,required('query')));
  else if(command==='get')result=await request('get-records',{ids:required('ids').split(',')});
  else if(command==='history')result=await request('record-history?id='+encodeURIComponent(required('id')));
  else if(['correct','withdraw','restore','purge'].includes(command)){

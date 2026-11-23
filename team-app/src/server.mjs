@@ -32,11 +32,16 @@ try {
  }else{
   let loadedModel;
   const model=async(...args)=>{loadedModel??=createModel();return (await loadedModel)(...args);};
-  const server=createKnowledgeServer(store,model,project,{authRequired:process.env.TEAM_LOCAL_VALIDATION!=='1',legacyAsk:process.env.TEAM_LEGACY_ASK==='1'});
+  const knowledgeMode=process.env.TEAM_CURRENT_KNOWLEDGE;
+  const server=createKnowledgeServer(store,model,project,{authRequired:process.env.TEAM_LOCAL_VALIDATION!=='1',
+    legacyAsk:process.env.TEAM_LEGACY_ASK==='1',currentKnowledge:knowledgeMode==='backfill'?'backfill':knowledgeMode==='1'});
   if(process.env.TEAM_LOCAL_VALIDATION==='1'&&process.env.TEAM_HOST&&process.env.TEAM_HOST!=='127.0.0.1')throw new Error('免鉴权验证模式只允许监听本机');
   if(process.env.TEAM_HOST&&process.env.TEAM_HOST!=='127.0.0.1'&&!process.env.TEAM_PUBLIC_URL?.startsWith('https://'))throw new Error('远程部署必须设置 HTTPS 的 TEAM_PUBLIC_URL 并配置反向代理');
   server.listen(Number(process.env.TEAM_PORT??5181),process.env.TEAM_HOST??'127.0.0.1',()=>console.log('知识服务 http://127.0.0.1:'+(process.env.TEAM_PORT??5181)));
-  const shutdown=()=>server.close(()=>{store.close();process.exit(0);});
+  const shutdown=()=>{
+    const workers=server.stopKnowledgeWorkers?.();
+    server.close(async()=>{await workers;store.close();process.exit(0);});
+  };
   process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
  }
 }catch(error){store.close();throw error;}

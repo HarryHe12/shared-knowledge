@@ -1,6 +1,7 @@
 import {lookupWiki} from './wiki.mjs';
 import {searchRecords, getRecords, getState} from './evidence.mjs';
 import {extractDraft} from './extract-draft.mjs';
+import {currentWiki} from './knowledge-wiki.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), {status});
 const integer = (value, fallback, max) => {
@@ -11,7 +12,7 @@ const integer = (value, fallback, max) => {
 
 // Every client uses the same business API. Channel restrictions apply to raw
 // evidence and history as well as to generated answers, including after awaits.
-export async function versionedHttp({req, url, input, send, store, model, auth, channels, chat, onboarding, bearer, cookie, sessionUser}) {
+export async function versionedHttp({req, url, input, send, store, model, auth, channels, chat, onboarding, bearer, cookie, sessionUser, knowledge}) {
   if (!url.pathname.startsWith('/api/v1/')) return false;
   const path = url.pathname.slice('/api/v1/'.length);
   const method = req.method;
@@ -113,12 +114,6 @@ export async function versionedHttp({req, url, input, send, store, model, auth, 
     result = chat.request(user, id, requestId, context);
   } else if (/^conversations\/[^/]+\/delete$/.test(path) && method === 'POST') {
     result = chat.remove(user, path.split('/')[1], context);
-  } else if (['search', 'wiki'].includes(path) && method === 'POST') {
-    result = await scopedLookup(path, store, user, scopeIds(), input, chat, authorize);
-  } else if (path === 'state' && ['GET', 'POST'].includes(method)) {
-    const ids = method === 'POST' ? scopeIds() : [scope()];
-    const results = ids.map(id => { authorize(id); return {scope_id: id, ...getState(store, user, id)}; });
-    result = {results, coverage: {scope_ids: ids, registered_items_only: true}};
   } else if (path === 'records') {
     const id = scope();
     authorize(id, method === 'POST');
@@ -142,10 +137,30 @@ export async function versionedHttp({req, url, input, send, store, model, auth, 
     const id = scope(); authorize(id, true); result = store[path](user, id, input);
   } else if (path === 'record-history' && method === 'GET') {
     const id = scope(); authorize(id); result = store.history(user, id, url.searchParams.get('id'));
+  } else {
+    result = await knowledgeRead({method, path, store, knowledge, user, scope, scopeIds, input, chat, authorize});
   }
   if (result === undefined) throw fail('未找到接口', 404);
   send(200, result);
   return true;
+}
+
+async function knowledgeRead({method, path, store, knowledge, user, scope, scopeIds, input, chat, authorize}) {
+  if (method === 'POST' && ['search', 'wiki'].includes(path)) {
+    return scopedLookup(path, store, user, scopeIds(), input, chat, authorize);
+  }
+  if (path === 'state' && ['GET', 'POST'].includes(method)) {
+    const ids = method === 'POST' ? scopeIds() : [scope()];
+    const results = ids.map(id => { authorize(id); return {scope_id:id, ...getState(store, user, id)}; });
+    return {results, coverage:{scope_ids:ids, registered_items_only:true}};
+  }
+  if (method !== 'GET' || !['wiki-source', 'knowledge-status'].includes(path)) return;
+  const id = scope();
+  authorize(id);
+  if (path === 'wiki-source') {
+    return store.knowledge ? {mode:'current', wiki:currentWiki(store.knowledge, id)} : {mode:'legacy'};
+  }
+  return {mode:store.knowledge ? 'current' : knowledge ? 'backfill' : 'legacy', updating:knowledge?.pending(id) ?? false};
 }
 
 async function scopedLookup(path, store, user, ids, input, chat, authorize) {
@@ -169,7 +184,8 @@ async function searchResults(store, user, ids, input) {
 async function wikiResults(store, user, ids, query) {
   if (typeof query !== 'string' || !query.trim() || query.length > 2000) throw fail('查询须为1—2000字符');
   const pages = await lookupWiki(store, user, ids, query);
-  return {pages: pages.map(({title, text, sources}) => ({
+  const updating = store.knowledge ? ids.filter(id => store.knowledge.pending(id)) : [];
+  return {...(updating.length ? {updating_scope_ids: updating} : {}), pages: pages.map(({title, text, sources}) => ({
     title, text, sources: sources.map(({id, project_id, version}) => ({id, project_id, version})),
   }))};
 }

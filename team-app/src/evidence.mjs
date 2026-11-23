@@ -9,12 +9,8 @@ export function getRecords(store,user,project,ids){
 }
 export async function searchRecords(store,user,project,input,options={}){
  store.access(user,project);
- if(typeof input.query!=='string'||!input.query.trim()||input.query.length>2000)throw invalid('query 须为1—2000字符');
- const limit=input.limit??15,depth=input.depth??1;
- if(!Number.isInteger(limit)||limit<1||limit>40)throw invalid('limit 须为1—40');
- if(!Number.isInteger(depth)||depth<0||depth>2)throw invalid('depth 须为0—2');
- const strategy=input.strategy??'hybrid';
- if(!['hybrid','exact'].includes(strategy))throw invalid('strategy 须为 hybrid 或 exact');
+ const {limit,depth,strategy}=searchOptions(input);
+ if(store.knowledge)return store.knowledge.search(store,user,project,input,{limit,depth,strategy,options});
 
  const result=strategy==='exact'?{hits:[],mode:'exact',description:'精确实体与引用'}:await retrieve(store,user,project,input.query,{...options,topK:limit});
  const all=store.records(user,project),byId=new Map(all.map(r=>[r.id,r]));
@@ -25,8 +21,24 @@ export async function searchRecords(store,user,project,input,options={}){
   coverage:{total_records:all.length,returned:Math.min(limit,hits.length),limit,truncated:hits.length>limit,corpus_not_returned:all.length-Math.min(limit,hits.length),exhaustive:false},
   meaning:'返回候选证据；零命中不证明没有记录。需要最新状态时另取 state。'};
 }
+
+function searchOptions(input){
+ if(typeof input.query!=='string'||!input.query.trim()||input.query.length>2000)throw invalid('query 须为1—2000字符');
+ const limit=input.limit??15,depth=input.depth??1;
+ if(!Number.isInteger(limit)||limit<1||limit>40)throw invalid('limit 须为1—40');
+ if(!Number.isInteger(depth)||depth<0||depth>2)throw invalid('depth 须为0—2');
+ const strategy=input.strategy??'hybrid';
+ if(!['hybrid','exact'].includes(strategy))throw invalid('strategy 须为 hybrid 或 exact');
+ return {limit,depth,strategy};
+}
 export function getState(store,user,project){
+ store.access(user,project);
+ if(store.knowledge?.pending(project))return {items:[],evidence:[],
+  coverage:{status:'updating',registered_items_only:true}};
  const items=store.items(user,project);
- const ids=new Set(items.map(i=>i.source_id));
- return {items,evidence:store.records(user,project).filter(r=>ids.has(r.id)),coverage:{registered_items_only:true,total_items:items.length}};
+ const ids=new Set(items.flatMap(i=>[i.source_id,i.details_source_id]));
+ const evidence=store.knowledge
+  ?store.knowledge.evidence(project,store.knowledge.entries(project).filter(entry=>ids.has(entry.id)))
+  :store.records(user,project).filter(r=>ids.has(r.id));
+ return {items,evidence,coverage:{registered_items_only:true,total_items:items.length}};
 }
