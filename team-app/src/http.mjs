@@ -10,14 +10,19 @@ import {versionedHttp} from './versioned-http.mjs';
 import {organizationPage} from './organization-page.mjs';
 import {Onboarding} from './onboarding.mjs';
 import {OnboardingPage} from './onboarding-page.mjs';
+import {CurrentKnowledge, setKnowledgeReadMode} from './current-knowledge.mjs';
+import {startKnowledgeWorkers} from './knowledge-wiki.mjs';
 
-export function createKnowledgeServer(store, model, project, {authRequired = true, legacyAsk = false, allowLegacyTokens = false} = {}) {
+export function createKnowledgeServer(store, model, project, {authRequired = true, legacyAsk = false, allowLegacyTokens = false, currentKnowledge = false} = {}) {
  const auth=new Auth(store,project),defaultProject=project;
  const channels=new Channels(store,auth),chat=new ChatService(store,model,auth);
  const onboarding=new Onboarding(store,auth);
  const attempts=new Map();
  const localUser = authRequired ? null : store.localValidationUser(project.id);
- return createServer(async(req,res)=>{
+ const knowledge=currentKnowledge?new CurrentKnowledge(store,{serving:currentKnowledge===true}):null;
+ setKnowledgeReadMode(store.db,currentKnowledge===true);
+ store.knowledge=currentKnowledge===true?knowledge:null;
+ const server=createServer(async(req,res)=>{
   const send=(status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
   res.setHeader('Cache-Control','no-store');
   res.setHeader('X-Content-Type-Options','nosniff');
@@ -55,7 +60,7 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
     const rate=attempts.get(key)??{count:0,until:now+60000};if(rate.until<now){rate.count=0;rate.until=now+60000;}rate.count++;attempts.set(key,rate);
     if(rate.count>60)return send(429,{error:'操作过于频繁，请稍后重试'});
    }
-   if(await versionedHttp({req,url,input,send,store,model,auth,channels,chat,onboarding,bearer,cookie,sessionUser}))return;
+   if(await versionedHttp({req,url,input,send,store,model,auth,channels,chat,onboarding,bearer,cookie,sessionUser,knowledge}))return;
    if(url.pathname.startsWith('/api/auth/')){
     const action=url.pathname.slice(10);
     if(req.method==='POST'&&['register','login','device-start','device-poll'].includes(action)){
@@ -98,27 +103,46 @@ export function createKnowledgeServer(store, model, project, {authRequired = tru
     if(parts[2]!==project.id||parts.length!==4)return send(404,{error:'仅提供默认知识库'});
     action=parts[3];
    }else if(parts.length!==2)return send(404,{error:'未找到接口'});
-   let result;
-   if(req.method==='GET'&&action==='records')result=store.records(actor,project.id);
-   else if(req.method==='GET'&&action==='items')result=store.items(actor,project.id);
-   else if(req.method==='GET'&&action==='timeline')result=store.timeline(actor,project.id,url.searchParams.get('item'));
-   else if(req.method==='GET'&&action==='record-history')result=store.history(actor,project.id,url.searchParams.get('id'));
-   else if(req.method==='POST'&&['correct','withdraw','restore','purge'].includes(action))result=store[action](actor,project.id,input);
-   else if(req.method==='POST'&&action==='records')result=store.add(actor,project.id,input);
-   else if(req.method==='POST'&&action==='extract'){
-    if(typeof input.text!=='string'||!input.text.trim()||input.text.length>20000)throw Object.assign(new Error('无效文本'),{status:400});
-    result=await extractDraft(store,chat,actor,project.id,input.text);
-   }else if(req.method==='POST'&&action==='search')result=await searchRecords(store,actor,project.id,input);
-   else if(req.method==='POST'&&action==='get-records')result=getRecords(store,actor,project.id,input.ids);
-   else if(req.method==='GET'&&action==='state')result=getState(store,actor,project.id);
-   else if(req.method==='POST'&&action==='ask'){
-    if(!legacyAsk)return send(410,{error:'服务端问答已停用；请使用 search、get-records、state，由调用方 Agent 组织回答'});
-    result=await ask(store,model,actor,project.id,input);
-   }
-   else return send(404,{error:'未找到接口'});
+   const result=await legacyKnowledge({method:req.method,action,url,input,store,chat,model,actor,scope:project.id,legacyAsk});
    if(sessionUser){const current=auth.user(bearer||cookie);auth.authorize(current,project.id,req.method==='POST'&&!['search','get-records','ask'].includes(action));}
    if(channel){const current=channels.authenticate(bearer);if(!current)throw Object.assign(new Error('会话已失效'),{status:401});channels.assertScope(current.app,current.user,project.id,req.method==='POST'&&!['search','get-records','ask'].includes(action));}
    send(200,result);
   }catch(error){send(error.status??500,{error:error.status?error.message:'处理失败，请检查模型或服务配置'});}
  });
+ if(knowledge){
+  const directory=currentKnowledge===true?process.env.TEAM_WIKI_DIR:undefined;
+  server.once('listening',()=>{server.stopKnowledgeWorkers=startKnowledgeWorkers(knowledge,chat.callModel.bind(chat),directory);});
+  server.once('close',()=>{void server.stopKnowledgeWorkers?.();});
+ }
+ return server;
+}
+
+async function legacyKnowledge({method,action,url,input,store,chat,model,actor,scope,legacyAsk}){
+ if(method==='GET'){
+  if(action==='records')return store.records(actor,scope);
+  if(action==='items')return legacyItems(store,actor,scope);
+  if(action==='timeline')return store.timeline(actor,scope,url.searchParams.get('item'));
+  if(action==='record-history')return store.history(actor,scope,url.searchParams.get('id'));
+  if(action==='state')return getState(store,actor,scope);
+ }
+ if(method==='POST')return legacyWriteOrSearch({action,input,store,chat,model,actor,scope,legacyAsk});
+ throw Object.assign(new Error('未找到接口'),{status:404});
+}
+
+function legacyItems(store,actor,scope){
+ if(store.knowledge?.pending(scope))throw Object.assign(new Error('知识范围正在更新，请稍后查询事项'),{status:409});
+ return store.items(actor,scope);
+}
+
+async function legacyWriteOrSearch({action,input,store,chat,model,actor,scope,legacyAsk}){
+ if(['correct','withdraw','restore','purge'].includes(action))return store[action](actor,scope,input);
+ if(action==='records')return store.add(actor,scope,input);
+ if(action==='extract')return extractDraft(store,chat,actor,scope,input.text);
+ if(action==='search')return searchRecords(store,actor,scope,input);
+ if(action==='get-records')return getRecords(store,actor,scope,input.ids);
+ if(action==='ask'){
+  if(!legacyAsk||store.knowledge)throw Object.assign(new Error('服务端问答已停用；请使用 search、state 或对话入口'),{status:410});
+  return ask(store,model,actor,scope,input);
+ }
+ throw Object.assign(new Error('未找到接口'),{status:404});
 }

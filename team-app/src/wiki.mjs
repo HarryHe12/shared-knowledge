@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {mkdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
 import {isAbsolute, join} from 'node:path';
 import {terms} from './store.mjs';
 
@@ -17,12 +18,23 @@ export function wikiSnapshot(records) {
     (left, right) => left[0].localeCompare(right[0])));
 }
 
-async function loadScopeWiki(directory, scope, records) {
+export async function writeScopeWiki(directory, scope, snapshot, pages) {
+  const file = wikiFile(directory, scope), temporary = file + '.' + randomUUID();
+  await mkdir(directory, {recursive: true, mode: 0o700});
+  try {
+    await writeFile(temporary, JSON.stringify({scope, snapshot, pages}), {mode: 0o600, flag: 'wx'});
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, {force: true});
+  }
+}
+
+export async function readScopeWiki(directory, scope) {
   try {
     const wiki = JSON.parse(await readFile(wikiFile(directory, scope), 'utf8'));
-    return wiki.scope === scope && wiki.snapshot === wikiSnapshot(records) ? wiki.pages : [];
+    return wiki.scope === scope ? wiki : null;
   } catch (error) {
-    if (error.code === 'ENOENT') return [];
+    if (error.code === 'ENOENT') return null;
     throw error;
   }
 }
@@ -32,10 +44,13 @@ export async function lookupWiki(view, user, scopes, question, directory = proce
   const keywords = new Set(terms(question));
   const candidates = [];
   for (const scope of scopes) {
-    const records = view.records(user, scope);
+    view.access(user, scope);
+    if (view.knowledge?.pending(scope)) continue;
+    const records = view.knowledge ? view.knowledge.evidence(scope, view.knowledge.entries(scope)) : view.records(user, scope);
     const byShortId = new Map(records.map(row => [row.id.slice(0, 8), row]));
     if (byShortId.size !== records.length) continue;
-    const pages = await loadScopeWiki(directory, scope, records);
+    const wiki = await readScopeWiki(directory, scope);
+    const pages = wiki?.snapshot === wikiSnapshot(records) ? wiki.pages : [];
     for (const {title, text} of pages) {
       const score = terms(title + ' ' + text).filter(word => keywords.has(word)).length;
       if (!score) continue;

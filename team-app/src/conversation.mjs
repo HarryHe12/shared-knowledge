@@ -8,6 +8,9 @@
  * - 资料按「谁 · 哪天 · 说了什么」编号呈现，不给模型看 UUID 等内部字段。
  * - 只有两条硬约束由代码保证：只喂有权限的资料；引用只能指向本次给出的资料。
  */
+import {getState, searchRecords} from './evidence.mjs';
+
+const RECENT = /最近|近期|这周|本周|上周|今天|昨天|前天|这几天|近况|进展|动态|有啥新|有什么新/;
 
 export const ANSWER_SYSTEM = `你是团队里的老同事「小知」，大家平时把工作进展、想法、决定都跟你说，你都记着。现在同事在微信上问你事情。
 
@@ -123,12 +126,13 @@ export function parseAnswer(output, evidence) {
 }
 
 /** Recent turns of one conversation, oldest first, as {role, text}; saves show the saved text. */
-export function recentHistory(db, conversationId, limit = MAX_HISTORY_TURNS * 2) {
+export function recentHistory(db, conversationId, limit = MAX_HISTORY_TURNS * 2, currentEpoch = null) {
   const rows = db.prepare(`SELECT m.role, m.text, m.result, r.text AS record_text
     FROM chat_messages m LEFT JOIN records r ON r.id=m.record_id
     LEFT JOIN record_lifecycle l ON l.record_id=m.record_id
     WHERE m.conversation_id=? AND COALESCE(l.deleted,0)=0
-    ORDER BY m.seq DESC LIMIT ?`).all(conversationId, limit);
+    AND (? IS NULL OR (m.record_id IS NULL AND (m.role='user' OR m.epoch=?)))
+    ORDER BY m.seq DESC LIMIT ?`).all(conversationId, currentEpoch, currentEpoch, limit);
   return rows.reverse().flatMap(row => {
     if (row.role === 'user') {
       const text = row.text ?? row.record_text;
@@ -142,8 +146,11 @@ export function recentHistory(db, conversationId, limit = MAX_HISTORY_TURNS * 2)
 }
 
 export async function answerWithFallback(model, input, evidence, lookup, maxEvidence, reference) {
-  const system = lookup ? ANSWER_SYSTEM +
-    '\n团队问题若完全或部分缺少证据，在回答末尾单独写 [WIKI_NEEDED]，以便系统补查。' : ANSWER_SYSTEM;
+  const base = input.coverage?.current_knowledge
+    ? ANSWER_SYSTEM + '\n生效事实由知识服务选出。当前结论以提供的生效事实为准，旧对话只用于理解提问。'
+    : ANSWER_SYSTEM;
+  const system = lookup ? base +
+    '\n团队问题若完全或部分缺少证据，在回答末尾单独写 [WIKI_NEEDED]，以便系统补查。' : base;
   let parsed;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -178,4 +185,30 @@ async function answerWithWiki(model, input, original, pages, maxEvidence, refere
   const parsed = parseAnswer(await model(system, {...input, wiki, evidence, coverage}), evidence);
   const status = parsed.quality === 'supported' ? 'answered' : 'insufficient';
   return {status, answer: parsed.answer, citations: rows.filter(row => parsed.citations.includes(row.id)), coverage};
+}
+
+function recentEvidence(view, user, scope, asOf, current) {
+  if (!view.knowledge) return view.records(user, scope);
+  const entries = view.knowledge.entries(scope, asOf, current);
+  return view.knowledge.evidence(scope, entries).sort((a, b) => a.order - b.order);
+}
+
+export async function scopeEvidence(view, user, scope, {question, lastAsked, asOf, today}) {
+  const found = await searchRecords(view, user, scope, {query: question, limit: 12, as_of: asOf});
+  // 追问（“那二店呢”）常常缺主语：带上一句再补查一次。
+  const followUp = lastAsked ? (await searchRecords(view, user, scope,
+    {query: String(lastAsked).slice(0, 500) + ' ' + question, limit: 6, as_of: asOf})).records : [];
+  const recent = RECENT.test(question) ? recentEvidence(view, user, scope, asOf, asOf === today).slice(-6).reverse() : [];
+  const state = view.knowledge && asOf !== today ? {items: [], evidence: []} : getState(view, user, scope);
+  const records = [...new Map([...found.records, ...followUp, ...recent, ...state.evidence].map(row => [row.id, row])).values()];
+  return {records, items: state.items, total: found.coverage.total_records};
+}
+
+// Round-robin sampling prevents the first selected scope from consuming the entire context.
+export function interleaveEvidence(groups, limit) {
+  const evidence = [];
+  for (let index = 0; evidence.length < limit && groups.some(group => index < group.length); index++) {
+    for (const group of groups) if (group[index] && evidence.length < limit) evidence.push(group[index]);
+  }
+  return evidence;
 }
