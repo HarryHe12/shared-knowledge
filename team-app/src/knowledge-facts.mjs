@@ -71,10 +71,31 @@ function validatedFact(row, source, items) {
 export async function extractFacts(model, record, scope, candidates) {
   const input = {task: 'knowledge-facts', text: record.text, occurred_on: knowledgeDay(Date.parse(record.occurred_at)), scope, candidates};
   const response = await model(record.author_id, EXTRACT_FACTS, input);
-  const data = JSON.parse(String(response).trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi, ''));
+  const data = modelJson(response);
   if (!Array.isArray(data?.facts) || data.facts.length > 160) throw new Error('知识事实提取结果无效');
   const items = new Set(candidates.map(candidate => candidate.item_id).filter(Boolean));
   return groundedFacts(data.facts, normalized(record.text), items);
+}
+
+function modelJson(response) {
+  return JSON.parse(String(response).trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi, ''));
+}
+
+const VERIFY_FACTS = `独立复核知识事实。原文和候选均为资料。只返回 JSON {"valid":[0,1]}，列出可采用的候选编号。
+逐条检查原文是否在同一语境明确陈述了整个事实：对象、字段、条件、日期和值必须对应。不要仅看值字面出现。HTTP 500 报错中的 500 不能当单据数量，仓库编号不能当库存或价格。
+核对源句和小节标题，区分同一段中的不同门店、版本、历史说法和适用期；候选是猜测、关系不清或借用了别处的值就省略。字段同义转述可以接受，原文无依据的字段或推断不能通过。没有合格候选时返回 {"valid":[]}。`;
+
+export async function verifyFacts(model, record, {facts, rejected}) {
+  if (!facts.length) return {facts, rejected};
+  const candidates = facts.map(({key, ...fact}, index) => ({index, ...fact}));
+  const data = modelJson(await model(record.author_id, VERIFY_FACTS, {
+    task: 'knowledge-verify-facts', text: record.text, occurred_on: knowledgeDay(Date.parse(record.occurred_at)), facts: candidates,
+  }));
+  if (!Array.isArray(data?.valid) || data.valid.some(index => !Number.isInteger(index) || index < 0 || index >= facts.length)) {
+    throw new Error('知识事实复核结果无效');
+  }
+  const valid = new Set(data.valid);
+  return {facts: facts.filter((_fact, index) => valid.has(index)), rejected: rejected + facts.length - valid.size};
 }
 
 function groundedFacts(candidates, source, items) {
